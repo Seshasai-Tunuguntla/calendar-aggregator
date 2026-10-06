@@ -114,6 +114,34 @@ bookings, buffers, minimum notice, booking horizon, event duration, slot step (e
 - empty calendars -> all working-hour slots; fully busy -> none
 - a slow, obviously-correct reference implementation that the fast version must match on many random inputs
 
+**Worked example** (also a unit test). Host Priya in `Asia/Kolkata`, Monday 12 Oct 2026, working
+hours 09:00-13:00, 15-minute buffers before and after, 30-minute event, 30-minute slot step, 4-hour
+minimum notice, now = 08:00. Busy: A 09:30-10:00, B 09:45-10:30, C 11:30-12:00 (all IST).
+
+| Step | What happens | Result |
+|---|---|---|
+| 1. Expand rules | Mon 09:00-13:00 IST becomes 03:30-07:30 UTC | working: 09:00-13:00 |
+| 2. Buffer + merge | Each busy interval grows 15 min each side: A 09:15-10:15, B 09:30-10:45, C 11:15-12:15; sort, merge overlapping/touching | busy: 09:15-10:45, 11:15-12:15 |
+| 3. Subtract | working minus busy | free: 09:00-09:15, 10:45-11:15, 12:15-13:00 |
+| 4. Slice | candidate starts every 30 min from 09:00; keep those whose whole 30 min fit in a free interval | 09:00 no (free ends 09:15); 10:45-11:15 is 30 min long but 10:45 isn't on the grid and 11:00-11:30 overruns; 12:30 yes |
+| 5. Filter | earliest start = 08:00 + 4 h = 12:00; max per day not reached | **12:30-13:00 IST only** |
+
+12:30 IST is 07:00 UTC, which a guest in New York sees as 03:00 EDT (New York leaves DST on 1 Nov 2026).
+
+Buffers on vs off: without buffers the free time is 09:00-09:30, 10:30-11:30 and 12:00-13:00, so
+step 4 gives 09:00, 10:30, 11:00, 12:00 and 12:30. The 4-hour minimum notice then removes 09:00,
+10:30 and 11:00, so turning buffers off adds **only 12:00**.
+
+**Approved details:**
+
+- **Times inside the algorithm are plain numbers** (UTC epoch milliseconds). The time-zone library is used only in step 1 (local rules -> UTC) and to find which host-local day a slot falls on.
+- **Slot grid:** candidate starts are the working interval's start plus whole steps, counted in real elapsed minutes. For normal rules that's 09:00, 09:30...; it stays well-defined on DST change days.
+- **DST:** each working interval's start and end are converted separately, so the real length is right on change days (e.g. 09:00 New York is 13:00 UTC on 8 Mar 2026 and 14:00 UTC on 1 Nov 2026). A rule time that doesn't exist (spring-forward gap) moves later, Temporal's `compatible` behaviour.
+- **Asymmetric buffers:** a new slot [s, e) needs [s - bufferBefore, e + bufferAfter) clear, so a busy interval [b0, b1) is expanded to **[b0 - bufferAfter, b1 + bufferBefore)**. Working-hour edges are not shrunk by buffers.
+- **Horizon:** a slot is offered only if it starts no later than now + horizonDays.
+- **Max per day:** counts confirmed bookings on the host's local day; a day at the limit offers nothing.
+- **Reference implementation:** checks every grid start directly, minute by minute, with no merging or subtraction; the fast version must match it on hundreds of random inputs from a fixed seed (so failures reproduce).
+
 ## Preventing double booking (second centerpiece)
 
 1. **Database:** a Postgres exclusion constraint so one host can never have two overlapping active bookings (`tstzrange` + `btree_gist`). Prisma can't express this, so it's added to the migration by hand, with a check that later migrations don't drop it.
@@ -191,6 +219,22 @@ bookings, buffers, minimum notice, booking horizon, event duration, slot step (e
 - Self-resetting with the Study Scheduler's protections: reset time stored in the database, 30-minute rule on cold starts and demo logins, a lock so only one rebuild runs, stable ids, demo accounts can't connect real Google accounts, everything a visitor can change is restored on reset
 - Busy events regenerated relative to "today" on each reset, so the demo never shows an empty or out-of-date week
 
+## Design rule
+
+This project must look **clearly different from both earlier projects**:
+
+- **Avoid the Landlord Maintenance Tracker look:** light utility style, hazard tape, key tag.
+- **Avoid the Study Scheduler look:** dark slate + amber, top bar/sidebar layout, heatmap-grid hero.
+
+Phase 8 mockup directions (each shown at desktop and 375 px, with pros/cons):
+
+1. **Editorial:** cream + deep green, large headings.
+2. **Bold neo-brutalist:** thick black borders, yellow/blue blocks.
+3. **Soft product:** pale blue/lilac, a centred booking card.
+
+**The public booking page is the priority screen**: it's what a guest (and a recruiter clicking
+"Try booking") sees first, so it gets designed first and most carefully.
+
 ## Out of scope for now
 
 Outlook/Apple calendars, payments, team or round-robin scheduling, recurring bookings, our own
@@ -230,7 +274,11 @@ goal; trade-off vs short caching to be explained).
 
 ## Notes for later phases
 
-- **Phase 2:** decide Luxon vs the Temporal polyfill (Node 25 has no built-in `Temporal` yet).
+- **Phase 2:** Temporal polyfill chosen over Luxon. Measure its client bundle cost; if large, keep it server/shared-side only.
 - **Phase 3:** decide the Prisma major version (the Study Scheduler pinned 6; check what 7+ needs with ESM + type stripping and on Vercel).
 - **Phase 4:** check Google's current testing-mode rules (test-user limit, refresh-token lifetime) and current scope list before documenting them.
 - **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.
+
+### Phase 12 checklist
+
+- [ ] Confirm Vercel runs the server's `.ts` files with this setup (Node type stripping, no build step), including the `shared` workspace package imported from the API function. If it doesn't, decide between Vercel's own TS compilation and a bundling step, and record why.
