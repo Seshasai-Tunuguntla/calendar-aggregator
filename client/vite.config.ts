@@ -1,6 +1,23 @@
 /// <reference types="vitest/config" />
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { defineConfig, type Plugin } from 'vite';
+import { PRIVATE_PAGE_HEADERS, PRIVATE_PAGE_PREFIX } from './src/guest/privatePage.ts';
+
+// Manage pages (/booking/<token>) carry a secret in their URL: send them with no-referrer and
+// noindex, in development and preview as vercel.json does in production.
+export function privatePageHeaders(req: IncomingMessage, res: ServerResponse, next: () => void): void {
+  if (req.url?.startsWith(PRIVATE_PAGE_PREFIX)) {
+    for (const [name, value] of Object.entries(PRIVATE_PAGE_HEADERS)) res.setHeader(name, value);
+  }
+  next();
+}
+
+const privatePages: Plugin = {
+  name: 'private-page-headers',
+  configureServer: (server) => void server.middlewares.use(privatePageHeaders),
+  configurePreviewServer: (server) => void server.middlewares.use(privatePageHeaders),
+};
 
 // Port 5190 so the client can run next to the Landlord (5173) and Study Scheduler (5180) clients.
 // /api is proxied to the local API, so the browser sees one origin, exactly as in production.
@@ -8,7 +25,7 @@ import { defineConfig } from 'vite';
 // header, and changeOrigin (which Vite's string shorthand turns on) would rewrite Host to
 // localhost:4200 and make every same-origin POST look cross-site.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), privatePages],
   server: {
     port: 5190,
     strictPort: true,

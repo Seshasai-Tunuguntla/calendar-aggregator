@@ -9,7 +9,6 @@ import '@fontsource/fraunces/latin-600.css';
 import './styles/tokens.css';
 // oxlint-disable-next-line import/no-unassigned-import -- a stylesheet, imported for its side effect
 import './styles/app.css';
-import { AuthProvider } from './auth/AuthContext.tsx';
 import { router } from './router.tsx';
 
 const root = document.getElementById('root');
@@ -17,8 +16,6 @@ if (!root) throw new Error('Missing #root element in index.html');
 
 createRoot(root).render(
   <StrictMode>
-    <AuthProvider>
-      <RouterProvider router={router} />
-    </AuthProvider>
+    <RouterProvider router={router} />
   </StrictMode>,
 );

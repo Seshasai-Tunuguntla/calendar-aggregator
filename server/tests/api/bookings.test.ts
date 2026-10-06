@@ -124,7 +124,7 @@ describe('POST /api/public/book/:handle/:slug/bookings', () => {
       guestName: 'Alex Kim',
       guestEmail: 'alex@example.com',
       guestTimeZone: 'America/New_York',
-      host: { name: 'Priyanka Rao', timeZone: 'Asia/Kolkata' },
+      host: { name: 'Priyanka Rao', timeZone: 'Asia/Kolkata', isDemo: false },
       eventType: { title: '30-min call', durationMinutes: 30, bookingPath: '/book/priyanka-rao/30-min-call' },
       canChange: true,
     });
@@ -168,12 +168,18 @@ describe('POST /api/public/book/:handle/:slug/bookings', () => {
     ['a time outside working hours', ist('11:00')],
     ['a time in the past', ist('07:00')],
     ['a time beyond the booking horizon', ist('09:00', '2026-11-16')],
-    ['a time already booked', AT_9],
-  ])('refuses %s (409)', async (name, start) => {
+  ])('refuses %s (409)', async (_name, start) => {
     await setUpHost();
-    if (name === 'a time already booked') await booked(AT_9, SAM);
     const res = await book(start);
     expect([res.status, res.body.error]).toEqual([409, SLOT_UNAVAILABLE]);
+    expect(await db.booking.count({ where: { guestEmail: ALEX.guestEmail } })).toBe(0);
+  });
+
+  it('says "That time was just taken" when another guest has booked it since the page loaded (409)', async () => {
+    await setUpHost();
+    await booked(AT_9, SAM);
+    const res = await book(AT_9);
+    expect([res.status, res.body.error]).toEqual([409, SLOT_TAKEN]);
     expect(await db.booking.count({ where: { guestEmail: ALEX.guestEmail } })).toBe(0);
   });
 
@@ -289,6 +295,16 @@ async function cancelWhileExpired() {
 const hostList = async () => hostBookingsResponseSchema.parse((await host.get('/api/bookings')).body).bookings;
 
 describe("the guest's manage link", () => {
+  it("is never indexed and never leaks through the Referer header", async () => {
+    await setUpHost();
+    const { manageToken } = await booked(AT_9);
+    for (const res of [await guest.get(manage(manageToken)), await guest.post(`${manage(manageToken)}/cancel`), await guest.get(manage('A'.repeat(43)))]) {
+      expect(res.headers['referrer-policy']).toBe('no-referrer');
+      expect(res.headers['x-robots-tag']).toBe('noindex, nofollow');
+      expect(res.headers['cache-control']).toBe('no-store');
+    }
+  });
+
   it('shows the booking to whoever has the link, and nothing for a wrong one', async () => {
     await setUpHost();
     const { manageToken } = await booked(AT_9);
@@ -397,8 +413,8 @@ describe("the guest's manage link", () => {
       await setUpHost();
       const { manageToken } = await booked(AT_9);
       await booked(AT_930, SAM);
-      expect((await guest.post(`${manage(manageToken)}/reschedule`, { start: AT_930 })).body).toEqual({ error: SLOT_UNAVAILABLE });
-      expect((await guest.post(`${manage(manageToken)}/reschedule`, { start: ist('11:00') })).status).toBe(409);
+      expect((await guest.post(`${manage(manageToken)}/reschedule`, { start: AT_930 })).body).toEqual({ error: SLOT_TAKEN });
+      expect((await guest.post(`${manage(manageToken)}/reschedule`, { start: ist('11:00') })).body).toEqual({ error: SLOT_UNAVAILABLE });
       expect((await db.booking.findFirstOrThrow({ where: { guestEmail: ALEX.guestEmail } })).startsAt.toISOString()).toBe(AT_9);
     });
 

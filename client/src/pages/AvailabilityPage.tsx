@@ -58,9 +58,12 @@ export function AvailabilityPage() {
 
 function Editor({ initial, eventType }: { initial: Availability; eventType: EventType | null }) {
   const [draft, setDraft] = useState(initial);
+  // What the server has: the preview shows this, not the draft.
+  const [saved, setSavedState] = useState(initial);
+  const unsaved = JSON.stringify(draft) !== JSON.stringify(saved);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(0);
+  const [saveCount, setSaveCount] = useState(0);
   const zones = Intl.supportedValuesOf('timeZone');
 
   const setRules = (rules: WeeklyRule[]) => setDraft((d) => ({ ...d, rules }));
@@ -77,8 +80,10 @@ function Editor({ initial, eventType }: { initial: Availability; eventType: Even
     }
     setSaving(true);
     try {
-      setDraft(await apiSend('PUT', '/api/availability', checked.data, availabilitySchema));
-      setSaved((n) => n + 1);
+      const result = await apiSend('PUT', '/api/availability', checked.data, availabilitySchema);
+      setDraft(result);
+      setSavedState(result);
+      setSaveCount((n) => n + 1);
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -200,10 +205,11 @@ function Editor({ initial, eventType }: { initial: Availability; eventType: Even
           Save hours
         </Button>
         {error && <p className="field__error">{error}</p>}
-        {saved > 0 && !error && !saving && <p className="status status--ok">Saved. Your booking page uses these now.</p>}
+        {saveCount > 0 && !unsaved && !error && !saving && <p className="status status--ok">Saved. Your booking page uses these now.</p>}
+        {unsaved && !saving && <p className="status status--warning">Unsaved changes</p>}
       </div>
 
-      <Preview eventType={eventType} version={saved} />
+      <Preview eventType={eventType} version={saveCount} unsaved={unsaved} />
     </form>
   );
 }
@@ -264,7 +270,7 @@ function DayRules({ weekday, name, rules, onChange }: { weekday: number; name: s
 
 // What guests see over the next week for the first active event type, from the same endpoint the
 // booking page uses: saved hours, minus busy times.
-function Preview({ eventType, version }: { eventType: EventType | null; version: number }) {
+function Preview({ eventType, version, unsaved }: { eventType: EventType | null; version: number; unsaved: boolean }) {
   const user = useSignedInUser();
   const dates = nextWeek(user.timeZone);
   const slots = useApi(
@@ -281,6 +287,10 @@ function Preview({ eventType, version }: { eventType: EventType | null; version:
       <h2 id="preview" className="panel__title">
         What guests see next week
       </h2>
+      <p className="muted">Based on your saved settings{eventType ? `, for ${eventType.title}` : ''}, in your time zone.</p>
+      {unsaved && (
+        <p className="status status--warning">You have unsaved changes. Save to see them here.</p>
+      )}
       {!eventType ? (
         <p>
           <Link to="/event-types">Create an event type</Link> to see your free times here.
@@ -293,9 +303,6 @@ function Preview({ eventType, version }: { eventType: EventType | null; version:
         <EmptyState title="No free times next week">Add hours above, or check your calendars aren't busy all week.</EmptyState>
       ) : (
         <>
-          <p className="muted">
-            {eventType.title}, in your time zone. Saved hours only.
-          </p>
           <ul className="preview">
             {groupByDay(slots.data.slots.map((s) => s.start), user.timeZone).map(([day, times]) => (
               <li key={day}>

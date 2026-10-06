@@ -89,7 +89,7 @@ describe('GET /api/public/book/:handle/:slug', () => {
     const res = await guest.get(PAGE);
     expect(res.status).toBe(200);
     expect(publicEventTypeResponseSchema.parse(res.body)).toEqual({
-      host: { name: 'Priyanka Rao', timeZone: 'Asia/Kolkata' },
+      host: { name: 'Priyanka Rao', timeZone: 'Asia/Kolkata', isDemo: false },
       eventType: { slug: '30-min-call', title: '30-min call', description: 'Talk it through.', durationMinutes: 30 },
     });
     expect(JSON.stringify(res.body)).not.toMatch(/priyanka@|Secret team|buffer|maxPerDay/);
@@ -268,6 +268,14 @@ describe('GET /api/public/book/:handle/:slug/slots', () => {
     await setUpHost(ONE_HOUR, [primary()]);
     expect((await guest.get(`${PAGE}/slots?from=2026-10-12&to=2026-10-13`)).status).toBe(400);
     expect((await guest.get(`${PAGE}/slots?from=12-10-2026&to=2026-10-13&tz=Asia/Kolkata`)).status).toBe(400);
+  });
+
+  it('opens the demo booking page ("Try booking") even before anyone has used "Try as host"', async () => {
+    expect(await db.user.count({ where: { isDemo: true } })).toBe(0);
+    const res = await guest.get('/api/public/book/priya/30-min-call');
+    expect(res.status).toBe(200);
+    expect(publicEventTypeResponseSchema.parse(res.body).host).toEqual({ name: 'Priya Sharma', timeZone: 'Asia/Kolkata', isDemo: true });
+    expect((await guest.get('/api/public/book/priya/30-min-call/slots?from=2026-10-13&to=2026-10-14&tz=Asia/Kolkata')).status).toBe(200);
   });
 
   it("works for the demo host, whose busy times come from the demo provider", async () => {

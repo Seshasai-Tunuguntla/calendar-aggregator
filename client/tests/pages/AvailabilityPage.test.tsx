@@ -60,6 +60,18 @@ describe('the availability page', () => {
     expect(await screen.findByText('Unknown time zone')).toBeInTheDocument();
   });
 
+  it('says the preview shows saved settings, and flags unsaved edits until they are saved', async () => {
+    mockApi(ready({ 'PUT /api/availability': ({ body }: { body: unknown }) => body }));
+    renderApp('/availability');
+    expect(await screen.findByText('Based on your saved settings, for 30-min call, in your time zone.')).toBeInTheDocument();
+    expect(screen.queryByText('You have unsaved changes. Save to see them here.')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Add hours on Friday' }));
+    expect(screen.getByText('You have unsaved changes. Save to see them here.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Save hours' }));
+    expect(await screen.findByText('Saved. Your booking page uses these now.')).toBeInTheDocument();
+    expect(screen.queryByText('You have unsaved changes. Save to see them here.')).not.toBeInTheDocument();
+  });
+
   it('removes hours, leaving the day unavailable', async () => {
     mockApi(ready());
     renderApp('/availability');

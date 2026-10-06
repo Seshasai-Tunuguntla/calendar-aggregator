@@ -17,6 +17,8 @@ import { bookingHostFields, cancelBooking, createBooking, findByManageToken, res
 import { availableSlots } from '../calendar/availableSlots.ts';
 import type { Timeouts } from '../bookings/timeouts.ts';
 import { CalendarProviderError } from '../calendar/provider.ts';
+import { DEMO_HOST } from '../demo/demoData.ts';
+import { ensureDemoHost } from '../demo/ensureDemoHost.ts';
 import type { CalendarProviders } from '../calendar/syncCalendars.ts';
 import { HttpError } from '../utils/httpError.ts';
 
@@ -40,7 +42,7 @@ function guestView(booking: ManagedBooking, now: number): GuestBooking {
     guestName: booking.guestName,
     guestEmail: booking.guestEmail,
     guestTimeZone: booking.guestTimeZone,
-    host: { name: eventType.user.name, timeZone: eventType.user.timeZone },
+    host: { name: eventType.user.name, timeZone: eventType.user.timeZone, isDemo: eventType.user.isDemo },
     eventType: {
       title: eventType.title,
       durationMinutes: (booking.endsAt.getTime() - booking.startsAt.getTime()) / 60_000,
@@ -78,6 +80,9 @@ export function publicBookingRouter({
   // all get the same 404.
   const findEventType = async (params: unknown) => {
     const parsed = pathSchema.safeParse(params);
+    // "Try booking" must work before anyone has used "Try as host": create the demo host on first
+    // visit. (Phase 10 turns this into the periodic, locked reset.)
+    if (parsed.success && parsed.data.handle === DEMO_HOST.handle) await ensureDemoHost(db, now());
     const eventType = parsed.success
       ? await db.eventType.findFirst({
           where: { slug: parsed.data.slug, active: true, user: { handle: parsed.data.handle } },
@@ -98,7 +103,7 @@ export function publicBookingRouter({
   router.get('/book/:handle/:slug', async (req, res) => {
     const { user, slug, title, description, durationMinutes } = await findEventType(req.params);
     res.json({
-      host: { name: user.name, timeZone: user.timeZone },
+      host: { name: user.name, timeZone: user.timeZone, isDemo: user.isDemo },
       eventType: { slug, title, description, durationMinutes },
     } satisfies PublicEventTypeResponse);
   });

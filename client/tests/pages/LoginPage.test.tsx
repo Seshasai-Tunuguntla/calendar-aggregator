@@ -12,6 +12,7 @@ describe('the sign-in page', () => {
     expect(url.pathname).toBe('/api/auth/google/start');
     expect(url.searchParams.get('tz')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(screen.getByRole('button', { name: 'Try as host' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: 'Try booking' })).toHaveAttribute('href', '/book/priya/30-min-call');
   });
 
   it('turns an error code from the Google callback into a message a person can act on', async () => {

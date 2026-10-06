@@ -2,7 +2,6 @@ import { render } from '@testing-library/react';
 import { RouterProvider, createMemoryRouter } from 'react-router';
 import { vi } from 'vitest';
 import type { SessionUser } from '@calendar-aggregator/shared';
-import { AuthProvider } from '../../src/auth/AuthContext.tsx';
 import { routes } from '../../src/router.tsx';
 
 export const HOST: SessionUser = {
@@ -47,14 +46,11 @@ export function mockApi(handlers: Record<string, Handler | object>): Call[] {
 export const signedInAs = (user: SessionUser = HOST) => ({ 'GET /api/auth/me': { user } });
 export const signedOut = { 'GET /api/auth/me': () => Response.json({ error: 'Not signed in' }, { status: 401 }) };
 
-// The whole app (auth provider and real routes) in a memory router, starting at `path`.
+// The whole app (its real routes, with the auth provider where the app has it) in a memory
+// router, starting at `path`.
 export function renderApp(path: string) {
   const router = createMemoryRouter(routes, { initialEntries: [path] });
-  render(
-    <AuthProvider>
-      <RouterProvider router={router} />
-    </AuthProvider>,
-  );
+  render(<RouterProvider router={router} />);
   return router;
 }
 

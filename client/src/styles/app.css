@@ -60,7 +60,8 @@ code {
   outline-offset: 2px;
 }
 
-main:focus {
+main:focus,
+.focus-target:focus {
   outline: none;
 }
 
@@ -109,6 +110,11 @@ main:focus {
   font-size: var(--text-lg);
   color: var(--color-ink-muted);
   max-width: 40rem;
+}
+
+/* Plain message pages (not found, errors): the heading and its explanation need a little air. */
+.page > h1 + .lead {
+  margin-top: var(--space-3);
 }
 
 .muted {
@@ -877,6 +883,218 @@ main:focus {
   margin-bottom: var(--space-6);
 }
 
+/* ---------- Guest pages: booking and manage ---------- */
+
+.guest__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: var(--space-8);
+  align-items: start;
+}
+
+.guest__intro h1 {
+  font-size: clamp(2.25rem, 1.4rem + 3.2vw, 3.75rem);
+  margin-bottom: var(--space-4);
+}
+
+.guest__intro > * + * {
+  margin-top: var(--space-4);
+}
+
+.guest__picker {
+  border-top: 3px double var(--color-ink);
+  padding-top: var(--space-4);
+  display: grid;
+  gap: var(--space-5);
+}
+
+.guest__footer {
+  margin-top: var(--space-8);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-rule);
+}
+
+.tz-picker {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-ink-muted);
+}
+
+.tz-picker__change {
+  min-height: auto;
+  padding: 0;
+  vertical-align: baseline;
+}
+
+.days__head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.days__month {
+  font-size: var(--text-xl);
+}
+
+.days__nav {
+  display: flex;
+  gap: var(--space-1);
+  /* Line the link text up with the content edge (the padding is for the hover wash and tap area). */
+  margin-inline: calc(-1 * var(--space-3));
+}
+
+.days__list {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.day-button,
+.slot {
+  width: 100%;
+}
+
+.day-button {
+  display: grid;
+  justify-items: center;
+  gap: 0.1rem;
+  min-height: var(--tap);
+  padding: var(--space-2) 0;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: 2px solid var(--color-control-line);
+  border-radius: var(--radius);
+  font: inherit;
+  cursor: pointer;
+}
+
+.day-button:hover {
+  background: var(--color-accent-wash);
+  border-color: var(--color-accent);
+}
+
+.day-button[aria-pressed='true'] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.day-button__weekday,
+.day-button__month {
+  font-size: var(--text-xs);
+}
+
+.day-button__day {
+  font: 600 var(--text-lg) / 1.1 var(--font-heading);
+}
+
+.slots__title {
+  font-size: var(--text-lg);
+  margin-bottom: var(--space-3);
+}
+
+.slots__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.booking-form {
+  display: grid;
+  gap: var(--space-4);
+  background: var(--color-paper-deep);
+  padding: var(--space-5);
+}
+
+.booking-form h2 {
+  font-size: var(--text-xl);
+}
+
+.booking-form h2:focus {
+  outline: none;
+}
+
+.booking-form__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.booking-form .button {
+  justify-self: start;
+}
+
+.confirmation {
+  max-width: 46rem;
+}
+
+.confirmation > * + * {
+  margin-top: var(--space-5);
+}
+
+.confirmation h1:focus {
+  outline: none;
+}
+
+.manage-link__url {
+  background: var(--color-surface);
+  border: 1px solid var(--color-rule);
+  padding: var(--space-3);
+}
+
+.next-steps {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.next-steps li + li {
+  margin-top: var(--space-2);
+}
+
+/* One reading column, like the confirmation, with even space between its blocks. */
+.manage {
+  display: grid;
+  gap: var(--space-5);
+  max-width: 46rem;
+}
+
+.manage > * {
+  margin-block: 0;
+}
+
+.manage__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.struck {
+  text-decoration: line-through;
+  color: var(--color-ink-muted);
+}
+
+.reschedule {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.reschedule > * + * {
+  margin-top: 0;
+}
+
+.time-picker {
+  display: grid;
+  gap: var(--space-5);
+}
+
 /* ---------- Small screens ---------- */
 
 @media (max-width: 48rem) {
@@ -985,5 +1203,34 @@ main:focus {
   .preview li {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
+  }
+
+  .guest__layout,
+  .booking-form__fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+
+  .days__list {
+    gap: var(--space-1);
+  }
+
+  /* Edge to edge on phones, so its days are as easy to tap as on the booking page. */
+  .reschedule {
+    margin-inline: calc(-1 * var(--space-4));
+    padding-inline: var(--space-4);
+  }
+
+  .slots__list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
+  .booking-form {
+    padding: var(--space-4);
+  }
+
+  .booking-form .button {
+    justify-self: stretch;
   }
 }

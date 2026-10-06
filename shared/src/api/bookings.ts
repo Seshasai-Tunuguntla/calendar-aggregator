@@ -26,7 +26,8 @@ export const guestBookingSchema = z.object({
   guestName: z.string(),
   guestEmail: z.string(),
   guestTimeZone: z.string(),
-  host: z.object({ name: z.string(), timeZone: z.string() }),
+  // isDemo: nothing is sent for the demo host, so the pages don't promise emails.
+  host: z.object({ name: z.string(), timeZone: z.string(), isDemo: z.boolean() }),
   eventType: z.object({ title: z.string(), durationMinutes: z.int(), bookingPath: z.string() }),
   // Cancelling and rescheduling are open until the meeting starts.
   canChange: z.boolean(),

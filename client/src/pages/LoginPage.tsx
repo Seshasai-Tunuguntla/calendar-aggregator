@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Navigate, useNavigate, useSearchParams } from 'react-router';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
+import { DEMO_BOOKING_PATH } from '@calendar-aggregator/shared';
 import { apiSend, errorMessage } from '../api/client.ts';
 import { useAuth } from '../auth/AuthContext.tsx';
 import { Button, ButtonLink } from '../components/Button.tsx';
@@ -85,6 +86,10 @@ export function LoginPage() {
           Try as host
         </Button>
         <p className="fine-print">Signs you in as Priya, a demo host with a busy week. Nothing is sent to anyone.</p>
+        <Link className="button button--secondary button--wide" to={DEMO_BOOKING_PATH}>
+          Try booking
+        </Link>
+        <p className="fine-print">Book a time with Priya, as a guest would.</p>
         {demoError && (
           <Notice tone="danger">
             <p>{demoError}</p>

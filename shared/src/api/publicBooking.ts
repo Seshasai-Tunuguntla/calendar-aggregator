@@ -7,7 +7,8 @@ export const MAX_SLOT_QUERY_DAYS = 42;
 // GET /api/public/book/:handle/:slug: what a guest sees about the host and the event type. No
 // email, calendar names, settings or anything else private.
 export const publicEventTypeResponseSchema = z.object({
-  host: z.object({ name: z.string(), timeZone: z.string() }),
+  // isDemo: the public demo host, whose bookings send no invitation (the confirmation says so).
+  host: z.object({ name: z.string(), timeZone: z.string(), isDemo: z.boolean() }),
   eventType: z.object({ slug: z.string(), title: z.string(), description: z.string(), durationMinutes: z.int() }),
 });
 export type PublicEventTypeResponse = z.infer<typeof publicEventTypeResponseSchema>;

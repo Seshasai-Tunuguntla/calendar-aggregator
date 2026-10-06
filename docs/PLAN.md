@@ -274,8 +274,8 @@ goal; trade-off vs short caching to be explained).
 | 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | Done |
 | 6 | Availability rules, settings, event types, slots endpoint; "Delete my account" backend | Done |
 | 7 | Public booking: double-booking protection, Google event creation, manage token, cancel, reschedule, concurrency tests | Done |
-| 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | Done (awaiting review) |
-| 9 | Public booking frontend (guest flow end to end) | |
+| 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | Done |
+| 9 | Public booking frontend (guest flow end to end) | Done (awaiting review) |
 | 10 | Self-resetting demo + tests | |
 | 11 | README for recruiters (diagrams, decisions, trade-offs, screenshots), Playwright smoke test | |
 | 12 | Deploy to Vercel + Neon (previews never touch production DB), production redirect URIs, live link, real-phone test | |
@@ -601,16 +601,61 @@ Every page in its ready, loading, error and empty states (the latter three by ha
 
 66 client tests (Vitest, Testing Library, the real routes in a memory router against a mocked API): each page's loading, error and empty states; all three booking-page warnings and their links; reconnect; still-on-calendar listed apart; cancelling only after confirmation; refused ticks showing the server's reason; saving hours in one request and catching overlaps before it; event type links from titles; deleting an account only with the handle typed, then the sign-in page saying what happened; sign-out; signed-out visitors and a mid-visit 401 sent to sign-in; and the self-hosted font. Server: 7 more for the status endpoint, 1 for the account fix, 2 for the phase 7 gap.
 
-## Notes for later phases
+## Phase 9 decisions (guest booking and manage pages)
 
-- **Phase 9:** the booking page uses the `.slot` buttons from the design system (phase 8 review: real buttons, visible borders, hover/focus/selected states, 44px targets) and adds "Try booking" to the sign-in page once it exists.
+### Routes, and what a guest's browser asks for
+
+- The guest pages, **`/book/:handle/:slug`** and **`/booking/:token`**, sit outside the host's auth provider in the router, so a guest's visit never calls `/api/auth/me` (tested). The host routes are unchanged.
+- **"Try booking"** on the sign-in page opens the demo host's 30-minute call (`DEMO_BOOKING_PATH`, from constants in `shared` that the demo data also uses; a test keeps them in step). The demo host is now also created on the first visit to its booking page, so the link works on a fresh database before anyone has pressed "Try as host" (tested).
+- The event type info and the guest's booking say whether the host is the demo (`isDemo`), so the guest pages never promise an email the demo doesn't send.
+
+### The booking page
+
+- **Time zone:** detected from the browser and shown as "Kolkata (GMT+5:30)", with **Change time zone**: every zone the browser knows, listed and sorted by today's names. Chrome still reports some zones by old names (India as `Asia/Calcutta`), so labels use today's city, and a zone the browser lists under another name isn't listed twice. Opening the list moves focus to it.
+- **Times** are in the guest's own language and clock (`Intl`, no locale forced); on a 24-hour clock the hour has two digits ("04:30"), since "4:30" next to "16:30" reads like the afternoon.
+- **Only days with free times:** times are fetched in 42-day windows from the guest's today and grouped by the guest's own date (one moment can fall on different days in different zones; tested). The strip shows 7 such days at a time; Later fetches the next window when it reaches the end, then says "No more free times after these." With none at all: "No free times in the next six weeks".
+- **Picking a time** opens the form for it and moves focus to its heading. When the host's clock shows a different time, the form says so ("That's 20:00 for Priya Sharma"), comparing clock times so another name for the same zone doesn't trigger it.
+- **The form** checks name and email with the shared schema the API uses, shows each field's message, and moves focus to the first field to fix. Other failures (a 503 from Google) are shown in the form with everything kept.
+- **"That time was just taken"** (409): the message, the times fetched again, the picked time cleared, the name and email kept for the next pick, and focus on the message (the form it was in has gone).
+  - Server change, found in the browser: the API said "just taken" only when two requests met at the lock. The common case, another guest booking the time after this page loaded, failed the earlier check and got "That time isn't available". That check now says "just taken" when a booking overlaps the requested time; other reasons (notice, hours, horizon) still say "isn't available" (both tested, for booking and rescheduling).
+- **Confirmation:** the time in the guest's zone (with the zone and offset), the manage link with a Copy button and a plain warning (it's the only way to cancel or reschedule, anyone with it can, and it isn't in the invitation), and what happens next (the invitation from Google, or for the demo that nothing is sent).
+
+### The manage page
+
+- The booking in the zone the guest booked in (stored with the booking), changeable; its status; Reschedule and Cancel booking.
+- **Reschedule** reuses the day strip and time buttons. The Move button names the day as well as the time, since the guest may have paged to another week. A 409 is handled like the booking page's.
+- **Cancel** asks first. A cancelled booking shows its time struck through and "Book a new time"; a meeting that has started can't be changed and says so; a link that matches nothing says "This link doesn't work" and where the link can be found.
+- Focus follows the action: opening a panel focuses its heading, closing it returns to the button that opened it, and an outcome (moved, cancelled, taken) focuses its message.
+
+### Keeping the manage link out of Referer headers and search engines
+
+The token is in the page's URL, so three layers:
+
+1. **The page's own response** carries `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow` for `/booking/*`: in production from **`vercel.json`** (a `headers` rule for `/booking/:token`), in development and `vite preview` from a small Vite plugin. Tests: the middleware sets both on `/booking/…` and nothing on other pages, and `vercel.json`'s values equal the shared `PRIVATE_PAGE_HEADERS`.
+2. **Meta tags** (`referrer` and `robots`) added while the page is mounted and removed after, for arriving by in-app navigation, where no page request is made (tested).
+3. **The API:** every `/api` response now has `X-Robots-Tag: noindex, nofollow` and `Cache-Control: no-store` (Helmet already sent `Referrer-Policy: no-referrer`); tested on the manage endpoints.
+
+All three were also confirmed on the dev servers' real responses.
+
+### Checked in the browser, at 1280px and 375px
+
+Loading, ready, time zone changes, form errors, a real "just taken" (a second guest booked the picked time through the API between picking and submitting), the confirmation, the manage view, rescheduling (including a real conflict), the move, cancel and its confirmation, cancelled, an invalid manage link and an unknown booking page; the empty and error states by stubbing the page's own fetch. No sideways scroll at 375px in any state. A started meeting needs a booking in the past, so it is covered by a test only.
+
+**Found by those checks and fixed:** the zone list called India "Calcutta" and could list it twice; "4:30" on 24-hour clocks; focus lost after a conflict, after an invalid submit and when panels opened or closed; the server's message in the common conflict case; the Move button without a day; demo pages promising emails; the Earlier/Later and Copy links indented by their padding (Copy is now a bordered button, it being the one thing to do on that screen); day buttons 39px wide inside the reschedule panel on phones (the panel now runs edge to edge there: 46px); the manage page's message touching the heading and wider than the details (one 46rem column now); and the heading touching its text on the not-found and crash pages, host ones included.
+
+### Tests
+
+Client: 43 new, 110 in all. The component tests are the first in any of the three projects: slot selection (`SlotPicker`, `DayPicker`: pressed state, keyboard, paging, loading more), booking-form validation (required fields, a bad email, focus, tidied values, failures shown), and the time helpers. Page tests run the real routes against a mocked API: the booking page (zone detection and change, only days with times, booking and the confirmation, "just taken", other failures, empty, error with retry, loading, not found, demo wording) and the manage page (private-page meta tags, zones, cancel, reschedule, its conflict, demo wording, started, invalid link, loading, error); the header tests; and "Try booking". Server: 4 new (the "just taken" message, the API's headers, the demo booking page on a fresh database, the shared demo constants); one case moved from "isn't available" to "just taken".
+
+## Notes for later phases
 
 - **Phase 12:** add `https://<production domain>/api/auth/google/callback` to the OAuth client's redirect URIs, and the five Google variables to Vercel (Production scope only).
 - **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.
 
 ### Phase 12 checklist
 
-- [ ] Set the API function's maximum duration to 60 s (`vercel.json`, `functions` -> `maxDuration`), the value `FUNCTION_MAX_DURATION_S` in `server/src/bookings/timeouts.ts` assumes.
+- [ ] Set the API function's maximum duration to 60 s (`functions` -> `maxDuration` in the existing `vercel.json`, which has the manage-page headers since phase 9), the value `FUNCTION_MAX_DURATION_S` in `server/src/bookings/timeouts.ts` assumes.
+- [ ] On the live site, confirm `curl -I https://<domain>/booking/<anything>` shows `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow`, and that `/book/...` pages don't.
 
 - [ ] Confirm Vercel runs the server's `.ts` files with this setup (Node type stripping, no build step), including the `shared` workspace package imported from the API function. If it doesn't, decide between Vercel's own TS compilation and a bundling step, and record why.
   - Early evidence from the phase 3 Prisma spike: Vercel's Node 24.21 has type stripping (`process.features.typescript = "strip"`), and it compiled an `api/index.ts` entry itself (it reported `api/index.js`) while `.ts` files it imported via relative `.ts` paths loaded fine. Not yet tested: the npm-workspace layout and importing `@calendar-aggregator/shared` from the function.

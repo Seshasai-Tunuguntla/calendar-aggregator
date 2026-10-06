@@ -1,5 +1,5 @@
 import { Temporal } from 'temporal-polyfill';
-import type { WeeklyRule } from '@calendar-aggregator/shared';
+import { DEMO_HANDLE, type WeeklyRule } from '@calendar-aggregator/shared';
 import type { Interval } from '@calendar-aggregator/shared/slots';
 
 // The public demo's host, "Priya", as pure data: stable ids (so links and tests never change),
@@ -27,7 +27,7 @@ export const DEMO_HOST = {
   id: DEMO_IDS.host,
   name: 'Priya Sharma',
   email: 'priya.demo@example.com',
-  handle: 'priya',
+  handle: DEMO_HANDLE,
   timeZone: DEMO_TIME_ZONE,
   isDemo: true,
   bufferBeforeMinutes: 5,

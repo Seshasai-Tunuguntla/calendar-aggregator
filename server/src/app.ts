@@ -70,9 +70,11 @@ export function createApp({
   app.disable('x-powered-by');
   app.use(helmet());
   app.use(express.json({ limit: '100kb' }));
-  // API responses can carry private data; no browser or shared cache should keep them.
+  // API responses can carry private data; no browser or shared cache should keep them, and no
+  // search engine should index them. (Helmet already sends Referrer-Policy: no-referrer.)
   app.use('/api', (_req, res, next) => {
     res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
     next();
   });
   app.use('/api', requireSameOrigin);

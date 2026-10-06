@@ -148,7 +148,14 @@ async function freshCheck({
   }
   const isFree = async (client: Prisma.TransactionClient) =>
     (await slotsWithBusy({ db: client, busy, ...query, ...(excludeBookingId ? { excludeBookingId } : {}) })).some((slot) => slot.start === start);
-  if (!(await isFree(db))) throw new HttpError(409, SLOT_UNAVAILABLE);
+  if (!(await isFree(db))) {
+    // Another guest got this exact time since the page loaded: say so, as the lock's recheck would.
+    const end = start + eventType.durationMinutes * MINUTE_MS;
+    const taken = await db.booking.count({
+      where: { hostId: host.id, status: 'CONFIRMED', startsAt: { lt: new Date(end) }, endsAt: { gt: new Date(start) }, ...(excludeBookingId ? { id: { not: excludeBookingId } } : {}) },
+    });
+    throw new HttpError(409, taken > 0 ? SLOT_TAKEN : SLOT_UNAVAILABLE);
+  }
   return { busy, recheck: isFree };
 }
 
@@ -384,6 +391,7 @@ function assertChangeable(booking: { status: string; startsAt: Date }, now: numb
 export const bookingHostFields = {
   id: true,
   name: true,
+  isDemo: true,
   handle: true,
   timeZone: true,
   bufferBeforeMinutes: true,

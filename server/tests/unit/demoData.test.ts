@@ -1,7 +1,7 @@
 import { Temporal } from 'temporal-polyfill';
 import { describe, expect, it } from 'vitest';
-import { localParts, weeklyRulesSchema } from '@calendar-aggregator/shared';
-import { DEMO_CALENDARS, DEMO_EVENT_TYPES, DEMO_RULES, DEMO_TIME_ZONE, buildDemoBusyEvents } from '../../src/demo/demoData.ts';
+import { DEMO_HANDLE, DEMO_TRY_BOOKING_SLUG, localParts, weeklyRulesSchema } from '@calendar-aggregator/shared';
+import { DEMO_CALENDARS, DEMO_EVENT_TYPES, DEMO_HOST, DEMO_RULES, DEMO_TIME_ZONE, buildDemoBusyEvents } from '../../src/demo/demoData.ts';
 
 const MONDAY = Temporal.PlainDate.from('2026-10-12');
 
@@ -21,6 +21,11 @@ describe('demo data', () => {
       countsAsBusy: false,
     });
     expect(DEMO_CALENDARS.filter((c) => c.busyAccess === 'READABLE').map((c) => c.name)).toEqual(['Work', 'Personal']);
+  });
+
+  it('has the booking page the sign-in page\'s "Try booking" opens', () => {
+    expect(DEMO_HOST.handle).toBe(DEMO_HANDLE);
+    expect(DEMO_EVENT_TYPES.map((e) => e.slug)).toContain(DEMO_TRY_BOOKING_SLUG);
   });
 
   it('has the three event types from the brief, with unique slugs', () => {
