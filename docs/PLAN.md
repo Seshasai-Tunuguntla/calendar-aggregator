@@ -277,7 +277,7 @@ goal; trade-off vs short caching to be explained).
 | 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | Done |
 | 9 | Public booking frontend (guest flow end to end) | Done |
 | 10 | Self-resetting demo + tests | Done |
-| 11 | README for recruiters (diagrams, decisions, trade-offs, screenshots), Playwright smoke test | |
+| 11 | README for recruiters (diagrams, decisions, trade-offs, screenshots), Playwright smoke test | Done |
 | 12 | Deploy to Vercel + Neon (previews never touch production DB), production redirect URIs, live link, real-phone test | |
 
 ## Phase 1 decisions (scaffold)
@@ -664,6 +664,22 @@ Client: 43 new, 110 in all. The component tests are the first in any of the thre
 **Mutation checks:** 14 deliberate bugs, one at a time. 13 were caught: no re-check under the lock, no reset lock, no booking lock, `>` for `>=` at 30 minutes, settings not restored, bookings kept, busy cache kept, busy events only three weeks, "Try booking" resetting a stale demo, a missing host not noticed, the cold-start check on every request, the cold start not awaited, and the handle not reserved. The 14th (not clearing the booking calendar) was an equivalent mutant, since deleting the calendars already clears it (`ON DELETE SET NULL`), so that line was removed.
 
 Checked live on the dev servers: the restarted API rebuilt the never-reset demo on its first request; an event type turned off in the browser stayed off until `DemoState` was made 31 minutes old, then came back on the next "Try as host".
+
+## Phase 11 decisions (README and end-to-end test)
+
+### The end-to-end test (`e2e/`)
+
+- **What it runs:** the production build of the client (`vite preview`, which now proxies `/api` like the dev server, tested) against the ordinary API server and a real Postgres database, on ports of its own (web 5290, API 4300) so it never meets the dev servers. Playwright starts both (`e2e/startApi.ts` migrates the database with `migrate deploy`, as production is migrated, and empties it first, so every run starts with a never-built demo and no rate-limit counts).
+- **Its own database:** `E2E_DATABASE_URL` (CI), or locally the test database's name with `_e2e` instead of `_test` (Prisma creates it on the first run). Like the unit tests' guard, it refuses any database whose name doesn't end in `_e2e`, since it empties it.
+- **The flow:** "Try booking" -> the booking page in the guest's zone (London, en-GB, fixed in the config so the machine's settings don't matter) -> pick the first time -> the form's own validation -> book -> the confirmation (time in the guest's zone, demo wording, focus on the heading) -> the manage page (its `no-referrer` and `noindex` headers and meta tag checked on the real response) -> cancel after confirming -> the time is free again. A second test signs in with "Try as host" and visits every host page.
+- **Accessibility:** axe (`@axe-core/playwright`, WCAG 2.0/2.1/2.2 A and AA rules) on every screen of both tests, plus "nothing scrolls sideways". Everything passed on the first run. Checked that the check bites: removing `lang` from `index.html` fails it with `html-has-lang`.
+- **Both widths:** each test runs as a 1280px desktop and as a 375px touch phone (two Playwright projects), one at a time since they share the demo.
+- **In CI** as a second job (Postgres service, `npx playwright install --with-deps chromium`, the report and traces uploaded when it fails), and **in the pre-push hook** after `npm run check`, so no commit is pushed without it.
+
+### Screenshots and README
+
+- `docs/screenshots/` are taken from the real app by Playwright (`npm run screenshots`, a separate config that reuses the test's servers; each shot waits for its page's content so it never catches a spinner).
+- The README is written for recruiters: the demo story, features, Mermaid diagrams of the architecture, the Google sign-in sequence and the booking flow (checked to render with Mermaid 11), the slot algorithm with its worked example, the CalendarProvider interface and why it exists, privacy and security, design decisions, known trade-offs (plus "demo bookings don't survive a demo reset"), the testing approach, running locally, and the hook. The live link is a placeholder until phase 12.
 
 ## Notes for later phases
 

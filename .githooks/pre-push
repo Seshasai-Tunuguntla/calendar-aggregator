@@ -1,7 +1,8 @@
 #!/bin/sh
-# Runs the same checks as CI (npm run check: typecheck, lint, tests, build) before anything reaches
-# GitHub, and blocks the push if they fail. Installed automatically by `npm install` (the root
-# "prepare" script points git's core.hooksPath at .githooks). See README.md, "Development".
+# Runs the same checks as CI (npm run check: typecheck, lint, contrast, tests, build; then the
+# end-to-end test) before anything reaches GitHub, and blocks the push if they fail. Installed
+# automatically by `npm install` (the root "prepare" script points git's core.hooksPath at
+# .githooks). See README.md, "Development".
 #
 # The checks run on the working folder, so they must match what's being pushed: the folder has to
 # be clean and the pushed commit has to be the checked-out one. Like CI, the tip of the push is
@@ -31,6 +32,15 @@ echo "pre-push: running the CI checks (npm run check)..."
 if ! npm run check --silent; then
   echo ""
   echo "pre-push: checks failed, push blocked. Fix them and push again."
+  exit 1
+fi
+
+# The end-to-end test, as CI runs it: needs Postgres (server/.env.test, or E2E_DATABASE_URL) and
+# Playwright's Chromium (npx playwright install chromium).
+echo "pre-push: running the end-to-end test (npm run e2e)..."
+if ! npm run e2e --silent; then
+  echo ""
+  echo "pre-push: the end-to-end test failed, push blocked. Fix it and push again."
   exit 1
 fi
 echo "pre-push: all checks passed."
