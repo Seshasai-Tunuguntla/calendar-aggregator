@@ -174,9 +174,10 @@ describe('POST /api/auth/logout', () => {
   });
 });
 
-describe('cross-site requests (CSRF defence in depth)', () => {
-  const post = (path: string) => request(app).post(path).set('Host', TEST_HOST);
+// A POST to our host with no Origin yet; each test sets (or leaves out) the Origin it's about.
+const post = (path: string) => request(app).post(path).set('Host', TEST_HOST);
 
+describe('cross-site requests (CSRF defence in depth)', () => {
   it('blocks a state-changing request from another origin', async () => {
     const res = await post('/api/auth/demo').set('Origin', 'https://evil.example');
     expect(res.status).toBe(403);
