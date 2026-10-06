@@ -1,14 +1,17 @@
 import { Temporal } from 'temporal-polyfill';
+import type { WeeklyRule } from '../api/availability.ts';
 import type { Interval } from './intervals.ts';
 
-// One block of working hours in the host's local time, repeating every week.
-// weekday uses ISO numbering, as Temporal does: 1 = Monday ... 7 = Sunday.
-// startMinute/endMinute are minutes after local midnight; endMinute may be 1440 (end of the day).
-export interface WeeklyRule {
-  weekday: number;
-  startMinute: number;
-  endMinute: number;
-}
+export type { WeeklyRule };
+
+// What a rule time means on a DST change day, when the wall clock skips it (spring forward) or
+// shows it twice (fall back). 'compatible' is the rule from RFC 5545, the iCalendar standard that
+// calendar apps follow: a skipped time is read with the UTC offset from before the gap, so 02:30
+// on 8 Mar 2026 in New York means 03:30 EDT (07:30 UTC), and a repeated time means its first
+// occurrence, so 01:30 on 1 Nov 2026 means 01:30 EDT (05:30 UTC). Following the same rule as the
+// host's calendar keeps a working-hours boundary and an event at the same wall time on the same
+// instant. Passed explicitly rather than relied on as Temporal's default.
+export const RULE_TIME_DISAMBIGUATION = 'compatible';
 
 // Turns weekly rules into concrete UTC intervals for every local date that could overlap
 // [from, to), and returns those that do, sorted by start (not merged: each interval's start is the
@@ -16,9 +19,8 @@ export interface WeeklyRule {
 //
 // DST: the start and end of each rule are converted separately, so the interval has its real
 // length on change days (a 01:00-04:00 rule lasts 2 hours on spring-forward day in New York and
-// 4 hours on fall-back day). A rule time that falls in a spring-forward gap moves later by the size
-// of the gap (Temporal's default 'compatible' disambiguation, the same as calendar apps); a repeated
-// fall-back time uses its first occurrence. If that leaves an interval empty, it's dropped.
+// 4 hours on fall-back day). Times that are skipped or repeated follow RULE_TIME_DISAMBIGUATION.
+// If that leaves an interval empty (02:45-03:15 on spring-forward day), it's dropped.
 export function expandWeeklyRules(
   rules: readonly WeeklyRule[],
   timeZone: string,
@@ -66,8 +68,13 @@ export function localDayInterval(date: Temporal.PlainDate, timeZone: string): In
   };
 }
 
+// PlainDate.toZonedDateTime takes no disambiguation option (it always uses 'compatible'), so the
+// conversion goes through PlainDateTime, which does.
 function atLocalMinute(date: Temporal.PlainDate, minute: number, timeZone: string): number {
   if (minute >= 24 * 60) return localDayInterval(date, timeZone).end;
-  const plainTime = new Temporal.PlainTime(Math.floor(minute / 60), minute % 60);
-  return date.toZonedDateTime({ timeZone, plainTime }).epochMilliseconds;
+  const time = new Temporal.PlainTime(Math.floor(minute / 60), minute % 60);
+  return date
+    .toPlainDateTime(time)
+    .toZonedDateTime(timeZone, { disambiguation: RULE_TIME_DISAMBIGUATION })
+    .epochMilliseconds;
 }

@@ -1,7 +1,7 @@
 import { Temporal } from 'temporal-polyfill';
 import { describe, expect, it } from 'vitest';
 import { localParts } from '../../src/index.ts';
-import { HOUR_MS, expandWeeklyRules, localDayInterval, type WeeklyRule } from '../../src/slots/index.ts';
+import { HOUR_MS, RULE_TIME_DISAMBIGUATION, expandWeeklyRules, localDayInterval, type WeeklyRule } from '../../src/slots/index.ts';
 import { IST, NY, at, utc, utcOffset } from './helpers.ts';
 
 const rule = (weekday: number, from: string, to: string): WeeklyRule => ({
@@ -86,14 +86,32 @@ describe('expandWeeklyRules', () => {
       expect(november).toEqual({ start: utc('2026-11-01T05:00Z'), end: utc('2026-11-01T09:00Z') });
     });
 
-    it('a start time in the spring-forward gap moves one hour later (02:30 does not exist; 03:30 EDT)', () => {
-      const [interval] = expandWeeklyRules([rule(SUNDAY, '02:30', '05:00')], NY, utc('2026-03-08T00:00Z'), utc('2026-03-09T00:00Z'));
-      expect(interval).toEqual({ start: utc('2026-03-08T07:30Z'), end: utc('2026-03-08T09:00Z') });
-    });
+    describe("times the clock skips or repeats follow RFC 5545 (Temporal's 'compatible')", () => {
+      it('is an explicit choice, not a library default', () => {
+        expect(RULE_TIME_DISAMBIGUATION).toBe('compatible');
+      });
 
-    it('drops a rule the gap leaves empty (02:45-03:15 becomes 03:45-03:15)', () => {
-      const intervals = expandWeeklyRules([rule(SUNDAY, '02:45', '03:15')], NY, utc('2026-03-08T00:00Z'), utc('2026-03-09T00:00Z'));
-      expect(intervals).toEqual([]);
+      it('reads a start in the spring-forward gap with the offset before the gap: 02:30 is 03:30 EDT', () => {
+        const [interval] = expandWeeklyRules([rule(SUNDAY, '02:30', '05:00')], NY, utc('2026-03-08T00:00Z'), utc('2026-03-09T00:00Z'));
+        // 'earlier' would give 01:30 EST (06:30Z), 'later' the same as here, and 'reject' would throw.
+        expect(interval).toEqual({ start: utc('2026-03-08T07:30Z'), end: utc('2026-03-08T09:00Z') });
+      });
+
+      it('reads an end in the gap the same way: 01:00-02:30 runs until 03:30 EDT', () => {
+        const [interval] = expandWeeklyRules([rule(SUNDAY, '01:00', '02:30')], NY, utc('2026-03-08T00:00Z'), utc('2026-03-09T00:00Z'));
+        expect(interval).toEqual({ start: utc('2026-03-08T06:00Z'), end: utc('2026-03-08T07:30Z') });
+      });
+
+      it('takes the first occurrence of a repeated fall-back time: 01:30 is 01:30 EDT, not EST', () => {
+        const [interval] = expandWeeklyRules([rule(SUNDAY, '01:30', '03:00')], NY, utc('2026-11-01T00:00Z'), utc('2026-11-02T00:00Z'));
+        // 'later' would give 01:30 EST (06:30Z). From 01:30 EDT to 03:00 EST is 2.5 real hours.
+        expect(interval).toEqual({ start: utc('2026-11-01T05:30Z'), end: utc('2026-11-01T08:00Z') });
+      });
+
+      it('drops a rule the gap leaves empty (02:45-03:15 becomes 03:45-03:15)', () => {
+        const intervals = expandWeeklyRules([rule(SUNDAY, '02:45', '03:15')], NY, utc('2026-03-08T00:00Z'), utc('2026-03-09T00:00Z'));
+        expect(intervals).toEqual([]);
+      });
     });
   });
 

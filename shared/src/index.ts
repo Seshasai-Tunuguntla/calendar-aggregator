@@ -3,4 +3,5 @@
 // entry point, '@calendar-aggregator/shared/slots' (see src/slots/index.ts).
 export * from './api/health.ts';
 export * from './api/errors.ts';
+export * from './api/availability.ts';
 export * from './time/localTime.ts';

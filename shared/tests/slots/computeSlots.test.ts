@@ -109,6 +109,16 @@ describe('computeSlots', () => {
       expect(startTimes(computeSlots(slotRequest({ rules, durationMinutes: 60 })), IST)).toContain('11:30');
     });
 
+    it('lets a slot run across midnight between two touching rules (rules themselves never cross it)', () => {
+      const rules = [
+        { weekday: 1, startMinute: 22 * 60, endMinute: 24 * 60 },
+        { weekday: 2, startMinute: 0, endMinute: 2 * 60 },
+      ];
+      const range = { start: at(IST, `${MONDAY}T20:00`), end: at(IST, `${TUESDAY}T03:00`) };
+      const slots = computeSlots(slotRequest({ rules, range, durationMinutes: 60 }));
+      expect(startTimes(slots, IST)).toEqual(['22:00', '22:30', '23:00', '23:30', '00:00', '00:30', '01:00']);
+    });
+
     it('lists a start only once when overlapping rules produce it twice', () => {
       const rules = [
         { weekday: 1, startMinute: 9 * 60, endMinute: 11 * 60 },
@@ -220,6 +230,17 @@ describe('computeSlots', () => {
       expect(saturday[0]?.start).toBe(utc('2026-10-31T13:00Z'));
       expect(sunday[0]?.start).toBe(utc('2026-11-01T14:00Z'));
       expect(sunday.at(-1)).toEqual({ start: utc('2026-11-01T21:30Z'), end: utc('2026-11-01T22:00Z') });
+    });
+
+    it('a rule starting in the spring-forward gap offers its first slot at 03:30 EDT', () => {
+      const slots = computeSlots(slotRequest({
+        hostTimeZone: NY,
+        rules: [{ weekday: 7, startMinute: 2 * 60 + 30, endMinute: 5 * 60 }],
+        now: utc('2026-03-01T00:00Z'),
+        range: { start: at(NY, '2026-03-08T00:00'), end: at(NY, '2026-03-09T00:00') },
+      }));
+      expect(slots.map((s) => localParts(s.start, NY).time)).toEqual(['03:30', '04:00', '04:30']);
+      expect(slots[0]?.start).toBe(utc('2026-03-08T07:30Z'));
     });
 
     it('host in India, guest in New York: one slot reads correctly for both, even on different dates', () => {
