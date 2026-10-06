@@ -5,13 +5,15 @@
   "description": "Zod schemas, inferred types and pure functions shared by the client and the server",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./slots": "./src/slots/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"
   },
   "dependencies": {
+    "temporal-polyfill": "^1.0.5",
     "zod": "^4.6.5"
   }
 }

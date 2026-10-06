@@ -135,7 +135,7 @@ step 4 gives 09:00, 10:30, 11:00, 12:00 and 12:30. The 4-hour minimum notice the
 **Approved details:**
 
 - **Times inside the algorithm are plain numbers** (UTC epoch milliseconds). The time-zone library is used only in step 1 (local rules -> UTC) and to find which host-local day a slot falls on.
-- **Slot grid:** candidate starts are the working interval's start plus whole steps, counted in real elapsed minutes. For normal rules that's 09:00, 09:30...; it stays well-defined on DST change days.
+- **Slot grid:** candidate starts are the working interval's start plus whole steps, counted in real elapsed minutes. For normal rules that's 09:00, 09:30...; it stays well-defined on DST change days. Each rule's own interval anchors its grid (see Phase 2 decisions for why not the merged interval).
 - **DST:** each working interval's start and end are converted separately, so the real length is right on change days (e.g. 09:00 New York is 13:00 UTC on 8 Mar 2026 and 14:00 UTC on 1 Nov 2026). A rule time that doesn't exist (spring-forward gap) moves later, Temporal's `compatible` behaviour.
 - **Asymmetric buffers:** a new slot [s, e) needs [s - bufferBefore, e + bufferAfter) clear, so a busy interval [b0, b1) is expanded to **[b0 - bufferAfter, b1 + bufferBefore)**. Working-hour edges are not shrunk by buffers.
 - **Horizon:** a slot is offered only if it starts no later than now + horizonDays.
@@ -246,7 +246,7 @@ goal; trade-off vs short caching to be explained).
 | # | Phase | Status |
 |---|---|---|
 | 1 | Scaffold the TypeScript monorepo (client, server, shared), strict mode, lint, Vitest, CI with typecheck; this plan | Done |
-| 2 | Slot algorithm as pure functions, all required tests + reference implementation (approach explained first) | |
+| 2 | Slot algorithm as pure functions, all required tests + reference implementation (approach explained first) | Done |
 | 3 | Prisma schema + migrations (incl. exclusion constraint), CalendarProvider interface, DemoCalendarProvider, demo host login, session cookies | |
 | 4 | Google OAuth: setup instructions, start/callback, PKCE, state, ID token verification, encrypted refresh tokens, refresh handling, disconnect; Google mocked in tests | |
 | 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | |
@@ -272,9 +272,24 @@ goal; trade-off vs short caching to be explained).
 - **Vitest everywhere**, replacing Jest from the earlier projects: it understands TypeScript and ESM natively and shares Vite's config on the client. Server tests keep the earlier layout: `tests/unit` (no database) and `tests/api` (Supertest). Client tests run in jsdom with Testing Library.
 - **CI: one job for now** (`npm ci`, typecheck, lint, test, build) on Node 24. The Postgres service joins in phase 3 and the Playwright job in phase 11. `npm ci` works here (the Study Scheduler needed `npm install`) because npm 11's lockfile records the Linux builds of oxlint and rolldown.
 
+## Phase 2 decisions (slot algorithm)
+
+- **Where it lives:** `shared/src/slots/` (`intervals.ts`, `weeklyRules.ts`, `computeSlots.ts`), published as a separate entry point, `@calendar-aggregator/shared/slots`. The main `@calendar-aggregator/shared` entry stays free of Temporal.
+- **Temporal stays off the client.** Measured with rolldown (Vite's bundler): the polyfill is 58 kB minified / **19 kB gzipped**, about +16% on the current client. The client doesn't need it: showing a slot in the guest's zone and grouping slots by the guest's date work with `Intl`, through `localParts(epochMs, timeZone)` in the main shared entry. A client lint rule (`no-restricted-imports`) rejects importing `temporal-polyfill` or `shared/slots`. The client gets slots from the API.
+- **Temporal is imported, not installed globally** (`import { Temporal } from 'temporal-polyfill'`), so nothing patches `globalThis` and the code keeps working unchanged when Node ships Temporal.
+- **Grid anchor (refines the approved detail):** each rule's own interval anchors its grid, not the merged working interval. If anchors came from merged intervals, rules that touch across days (e.g. 24-hour availability) would merge into one long interval whose start depends on how far back the request looked, so the grid could shift between two requests for the same week. Per-rule anchors keep the grid fixed. A slot can still run across two adjacent rules (09:00-12:00 + 12:00-14:00 offers 11:30-12:30), because fit is checked against the merged free time. Overlapping rules can produce the same start twice; it's listed once.
+- **Step 4 checks grid starts against free time** (binary search per start) instead of slicing each free interval. Same result, and it handles several anchors per day cleanly. Notice and horizon bound which starts are generated at all (step 5's first half), so out-of-window slots are never built. Total: O(n log n + c log f) for n busy intervals, c grid starts in the window, f free intervals.
+- **Weekdays use ISO numbering** (1 = Monday ... 7 = Sunday), matching Temporal's `dayOfWeek`. The Prisma model in phase 3 uses the same.
+- **Horizon is in real 24-hour days** from now (so across a DST change it's an hour longer or shorter in local terms). Simple, and invisible at a 30-day horizon.
+- **The pure function checks its own inputs** (positive integer duration and step, non-negative buffers/notice/horizon, `maxPerDay` null or >= 1, valid rules) and throws `RangeError`. The API validates with Zod first (phase 6); this keeps the function safe anywhere, e.g. a zero step would loop forever.
+- **Tests (73 in `shared`):** every required case, plus asymmetric buffers each way, grid anchoring, adjacent and overlapping rules, range filtering, and notice/horizon edges to the millisecond. The worked example and its buffers-on/off variant are tests.
+- **Reference implementation** (`tests/slots/reference.ts`): minute-by-minute with sets, no merging/subtraction/binary search, buffers written from the slot's side. Compared with the fast version on **400 seeded random requests** in 8 zones chosen for awkward cases (Lord Howe's 30-minute DST, Kathmandu/Chatham's 45-minute offsets, Santiago's midnight changes). "Now" is usually placed just before the chosen zone's next real DST change, found with Temporal rather than hard-coded. A guard stops the test passing vacuously: >8,000 slots in total, fewer than a third of requests empty, more than 40 that cross a DST change with slots, and buffers and the daily limit each changing the result in many cases. The first version of the generator failed this guard (54% empty, only 14 DST crossings) and was fixed.
+- **Independent check of the time-zone code:** the reference shares `expandWeeklyRules` with the fast version, so that function is also checked against `Intl` on its own: every interval in 8 zones x 53 weeks of 2026 must read back as its rule's weekday and start time, except next to a DST change (which must be rare).
+- **Mutation checks** (done by hand, as in the Study Scheduler): 14 deliberate bugs, one at a time (touching intervals not merged, buffers swapped or ignored, notice ignored, horizon off by a millisecond, `>` for `>=` in the daily limit, counting by UTC day, grid rounding down, DST-blind rule ends, a slot not allowed to end exactly at free time, duplicates kept, gap-emptied intervals kept, empty intervals merged, ...). 13 made tests fail. The 14th (`cursor = c.end` instead of `Math.max(cursor, c.end)` in `subtractIntervals`) was an equivalent mutant, since cuts are merged, so the code was simplified to match.
+- **Lint now fails on warnings** (`oxlint --deny-warnings`), so warnings can't pile up unread.
+
 ## Notes for later phases
 
-- **Phase 2:** Temporal polyfill chosen over Luxon. Measure its client bundle cost; if large, keep it server/shared-side only.
 - **Phase 3:** decide the Prisma major version (the Study Scheduler pinned 6; check what 7+ needs with ESM + type stripping and on Vercel).
 - **Phase 4:** check Google's current testing-mode rules (test-user limit, refresh-token lifetime) and current scope list before documenting them.
 - **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.

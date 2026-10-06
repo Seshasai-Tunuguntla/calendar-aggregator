@@ -22,7 +22,24 @@
     },
     {
       "files": ["client/**"],
-      "env": { "browser": true }
+      "env": { "browser": true },
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "temporal-polyfill",
+                "message": "Keep Temporal off the client (~19 kB gzipped); format times with localParts from @calendar-aggregator/shared."
+              },
+              {
+                "name": "@calendar-aggregator/shared/slots",
+                "message": "The slot algorithm runs on the server; the client gets slots from the API."
+              }
+            ]
+          }
+        ]
+      }
     }
   ],
   "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/coverage/**"]
