@@ -78,7 +78,16 @@ calendar.
    It's the client's port (5190), not the API's (4200): sign-in starts on the app's own origin
    through the Vite proxy, and must come back to the same origin so the browser sends back the
    short-lived sign-in cookie and receives the session cookie there. Google allows plain `http`
-   only for localhost. The production URI is added in phase 12.
+   only for localhost.
+
+   For the live site, add this one too (exactly, with `https` and no trailing slash):
+
+   ```
+   https://calendar-aggregator-beta.vercel.app/api/auth/google/callback
+   ```
+
+   It's `<APP_ORIGIN>/api/auth/google/callback`, with `APP_ORIGIN` as set on Vercel. If the site
+   ever moves to another domain, add that domain's URI the same way and update `APP_ORIGIN`.
 5. Click **Create**.
 6. **The client secret is shown only now.** Since mid-2025 Google masks it afterwards (only the
    last few characters stay visible). Click **Download JSON** or copy both values straight into

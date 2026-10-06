@@ -22,7 +22,8 @@
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "contrast": "npm run contrast --workspace client",
     "e2e": "playwright test -c e2e/playwright.config.ts",
-    "screenshots": "playwright test -c e2e/screenshots.config.ts"
+    "screenshots": "playwright test -c e2e/screenshots.config.ts",
+    "e2e:live": "playwright test -c e2e/live.config.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

@@ -7,7 +7,7 @@ share a booking link. A guest picks a free time in their own time zone, and the 
 your Google Calendar with an invitation from Google: a small Calendly, built to show **OAuth done
 properly** and **careful integration with a real external API**, in TypeScript end to end.
 
-**Live demo:** _coming soon_ (no sign-up needed: "Try booking" or "Try as host")
+**Live demo: <https://calendar-aggregator-beta.vercel.app>** (no sign-up needed: "Try booking" or "Try as host")
 
 | A guest's booking page | The host's dashboard |
 |---|---|
@@ -215,6 +215,8 @@ flowchart TD
 - Rate limits are stored in Postgres (shared by every instance): 300 public requests per 15 minutes
   per client, 10 booking changes per 15 minutes, and 10 bookings with real hosts per day, because
   each one makes Google email whatever address was typed.
+- Preview deployments can't reach the production database: it's configured for Production only,
+  and a preview's API refuses to start without a database of its own.
 
 ## Design decisions
 
@@ -322,7 +324,17 @@ npm run e2e
 The end-to-end test builds the client, serves it with `vite preview` on port 5290 next to an API
 on port 4300, and uses its own database: the test database's name with `_e2e` instead of `_test`
 (created and migrated automatically, and emptied before every run; it refuses any other name), or
-`E2E_DATABASE_URL`. `npm run screenshots` retakes the pictures in `docs/screenshots/` the same way.
+`E2E_DATABASE_URL`. `npm run screenshots` retakes the pictures in `docs/screenshots/` the same way,
+and `LIVE_URL=<site> npm run e2e:live` runs the same tests against a deployed site.
+
+### Deploying
+
+One Vercel project serves both: the client's static build and the API as one Node function
+(`api/index.ts`, 60-second limit). `vercel.json` sets the build: `server/scripts/vercelBuild.ts`
+applies migrations over Neon's direct connection (production only) and builds the client.
+The database settings exist for Production only, and a preview deployment's API switches itself
+off unless it has a database of its own, so previews can't touch the production database.
+[docs/PLAN.md](docs/PLAN.md), "Phase 12 decisions", has the details and the environment variables.
 
 ### The pre-push hook
 

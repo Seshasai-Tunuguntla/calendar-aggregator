@@ -278,7 +278,7 @@ goal; trade-off vs short caching to be explained).
 | 9 | Public booking frontend (guest flow end to end) | Done |
 | 10 | Self-resetting demo + tests | Done |
 | 11 | README for recruiters (diagrams, decisions, trade-offs, screenshots), Playwright smoke test | Done |
-| 12 | Deploy to Vercel + Neon (previews never touch production DB), production redirect URIs, live link, real-phone test | |
+| 12 | Deploy to Vercel + Neon (previews never touch production DB), production redirect URIs, live link, real-phone test | Done, except the steps that need the author (see the Phase 12 checklist) |
 
 ## Phase 1 decisions (scaffold)
 
@@ -681,17 +681,53 @@ Checked live on the dev servers: the restarted API rebuilt the never-reset demo 
 - `docs/screenshots/` are taken from the real app by Playwright (`npm run screenshots`, a separate config that reuses the test's servers; each shot waits for its page's content so it never catches a spinner).
 - The README is written for recruiters: the demo story, features, Mermaid diagrams of the architecture, the Google sign-in sequence and the booking flow (checked to render with Mermaid 11), the slot algorithm with its worked example, the CalendarProvider interface and why it exists, privacy and security, design decisions, known trade-offs (plus "demo bookings don't survive a demo reset"), the testing approach, running locally, and the hook. The live link is a placeholder until phase 12.
 
-## Notes for later phases
+## Phase 12 decisions (deployment)
 
-- **Phase 12:** add `https://<production domain>/api/auth/google/callback` to the OAuth client's redirect URIs, and the five Google variables to Vercel (Production scope only).
-- **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.
+**Live: <https://calendar-aggregator-beta.vercel.app>** (Vercel added "-beta" because `calendar-aggregator.vercel.app` belongs to someone else, as it added "-green" for the Study Scheduler).
+
+### One Vercel project, from the command line
+
+- **Project `calendar-aggregator`** (team seshasais-projects), created and deployed with the Vercel CLI; no Git connection yet, so deployments happen with `vercel deploy` (connecting the GitHub repo for automatic deployments is in the author's checklist). Node 24.x, region `iad1` (Washington, D.C.).
+- **`vercel.json`:** `npm ci`; build `node server/scripts/vercelBuild.ts`; static output `client/dist`; the API function `api/index.ts` with **`maxDuration: 60`** (what `FUNCTION_MAX_DURATION_S` assumes; a test checks they match); rewrites `/api/(.*)` -> the function and everything else -> `index.html` (static files are served first); the manage pages' headers.
+- **`api/index.ts`** only calls `createVercelApp()` (`server/src/vercel.ts`, tested): the ordinary app with the cold-start demo reset on. It answers a plain 503 instead of starting when settings are missing (their names are logged, never values), and when it's a preview without a database of its own.
+
+### TypeScript on Vercel: Vercel's own compilation, plus the shared sources
+
+Checked on a preview: Vercel's Node builder **compiles the server's `.ts` files to JavaScript itself** (no build step of ours), but it didn't include the **`shared` workspace package**: the API crashed with `ERR_MODULE_NOT_FOUND` for `node_modules/@calendar-aggregator/shared/src/slots/index.ts`, because the package's `exports` point at `.ts` sources the function bundle didn't carry. Fix: `"includeFiles": "shared/src/**"` on the function, so those files ship and Node 24's type stripping runs them (they're reached through the workspace symlink, outside `node_modules`, where Node allows it). The whole API then loaded, and every live check below passed. Chosen over a bundling step (esbuild, or Vercel's Build Output API): one line of configuration instead of a second way of building the server, and development, tests and production still run the same source files. Prisma's query engine was bundled without any `includeFiles` (queries work live).
+
+### Neon: pooled for the app, direct for migrations, production only
+
+- A new Neon database **`calendar-aggregator-db`** through the Neon integration already installed on the Vercel team (the Study Scheduler's), on the **Free plan** (`free_v3`), region `iad1` next to the function, without Neon Auth (the app has its own sign-in). Connected to the **Production environment only**, so previews and development get none of its settings (checked with `vercel env ls`).
+- **The app uses `DATABASE_URL`, Neon's pooled connection** (PgBouncer in transaction mode): every lock the app takes is transaction-scoped (`pg_advisory_xact_lock`, `SET LOCAL`), so they work through the pooler, and Neon's pooler supports Prisma's prepared statements (no errors in the live tests).
+- **Migrations run during the production build over `DATABASE_URL_UNPOOLED`**, the direct connection (`prisma migrate deploy` needs a session). `vercelBuild.ts` refuses to migrate from anything but production unless `PREVIEW_HAS_OWN_DATABASE=true` (for a future Neon branch per preview), and fails the build if production has no direct URL (tested; it's what stopped the first deployment, which Vercel made a production one before the database existed).
+- **Previews are isolated twice:** they have no database settings at all, and even if they were given some, `createVercelApp` switches their API off (`isPreviewWithoutOwnDatabase`, tested; seen live: a preview's `/api/health` answers 503 "This preview deployment has no database of its own").
+
+### Secrets
+
+`COOKIE_SIGNING_SECRET` and `TOKEN_ENCRYPTION_KEYS` (`1:<key>`) were generated locally (32 random bytes each) and, with the existing OAuth client's `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from `server/.env`, sent to `vercel env add ... production --sensitive` on stdin by a short script that printed only names: never shown, never in a command line, never in a file in the repo. Sensitive variables can't be read back from Vercel. `APP_ORIGIN` is the production URL (not secret). The CLI's `vercel link` also wrote a short-lived `VERCEL_OIDC_TOKEN` to `.env.local` and appended `.env*` to `.gitignore`; the file was deleted (the app doesn't use it) and the `.gitignore` edit undone (it would have re-ignored the committed `.env.example` files). The CLI also downloaded Neon "agent skills" into the repo, which were removed.
+
+### Checked on the live site
+
+- `/api/health` 200; Prisma through the pooler; the cold-start demo build.
+- **Client address for the rate limiters:** with `LOG_CLIENT_IP=true` for one deployment, every request logged the same visitor address as `req.ip`, the limiters' key and Vercel's `x-real-ip`; a request sending a forged `X-Forwarded-For: 198.51.100.77` never showed that address (Vercel's edge overwrites the header, and one trusted hop takes the address it wrote). Then **IP logging was turned off**: the variable removed, redeployed, and no address lines since. The flag (`logClientIp`) stays in the code, off by default, for the next such check.
+- **Private-page headers:** `/booking/<token>` has `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow`; `/book/priya/30-min-call` has neither.
+- **Demo:** "Try as host" (session cookie `__Host-` prefixed, Secure), the dashboard's status endpoint and event types; a guest booking -> the manage view -> reschedule -> cancel -> cancel again (idempotent), through the API.
+- **The end-to-end tests against the live site** (`LIVE_URL=https://calendar-aggregator-beta.vercel.app npm run e2e:live`, new): the guest flow and every host page at 1280px and 375px, with axe: all 4 passed.
+- **Google sign-in** starts correctly (S256 PKCE, the six scopes, `__Host-` flow cookie, `redirect_uri` `https://calendar-aggregator-beta.vercel.app/api/auth/google/callback`); finishing it needs that URI registered in Google Cloud Console (author).
 
 ### Phase 12 checklist
 
-- [ ] Set the API function's maximum duration to 60 s (`functions` -> `maxDuration` in the existing `vercel.json`, which has the manage-page headers since phase 9), the value `FUNCTION_MAX_DURATION_S` in `server/src/bookings/timeouts.ts` assumes.
-- [ ] On the live site, confirm `curl -I https://<domain>/booking/<anything>` shows `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow`, and that `/book/...` pages don't.
+- [x] API function maximum duration 60 s (`vercel.json`; tested against `FUNCTION_MAX_DURATION_S`).
+- [x] Private-page headers on the live site (above).
+- [x] Server `.ts` files on Vercel: Vercel compiles them; the `shared` sources ship with `includeFiles` (above).
+- [x] Prisma's query engine bundled in the workspace layout, without `includeFiles` (queries work live).
+- [x] Client address read correctly for the rate limiters, then IP logging off (above).
+- [ ] **Author:** in Google Cloud Console > Clients > the web client, add the redirect URI `https://calendar-aggregator-beta.vercel.app/api/auth/google/callback` (docs/google-setup.md, step 6). Until then, "Sign in with Google" on the live site ends at Google's `redirect_uri_mismatch` page; the demo works without it.
+- [ ] **Author:** in Google Cloud Console > Data Access, replace `calendar.freebusy` with `calendar.events.freebusy` (the local test client was set up before the phase 5 switch; Testing mode doesn't need it, verification does).
+- [ ] **Author:** optionally connect the GitHub repo to the Vercel project (Vercel dashboard > calendar-aggregator > Settings > Git) for automatic deployments on push. Previews made that way are safe: no database settings, and their API switches itself off.
+- [ ] **Author:** the real-phone test: open the live link on a phone, "Try booking", book, open the manage link, cancel; and "Try as host".
 
-- [ ] Confirm Vercel runs the server's `.ts` files with this setup (Node type stripping, no build step), including the `shared` workspace package imported from the API function. If it doesn't, decide between Vercel's own TS compilation and a bundling step, and record why.
-  - Early evidence from the phase 3 Prisma spike: Vercel's Node 24.21 has type stripping (`process.features.typescript = "strip"`), and it compiled an `api/index.ts` entry itself (it reported `api/index.js`) while `.ts` files it imported via relative `.ts` paths loaded fine. Not yet tested: the npm-workspace layout and importing `@calendar-aggregator/shared` from the function.
-- [ ] In the Google console's Data Access, replace `calendar.freebusy` with `calendar.events.freebusy` (the local test client was set up before the phase 5 switch; Testing mode doesn't need it, verification does).
-- [ ] Confirm Prisma 6's query engine is bundled into the function in the workspace layout (it was without `includeFiles` in the single-package spike; the Study Scheduler's nested layout needed it).
+## Notes for later phases
+
+- **Client bundle** is ~390 kB before gzip (465 kB now), mostly Zod and react-router; revisit (e.g. `zod/mini` on the client).
+- **`npm audit`** reports 3 high-severity advisories in `deepmerge-ts`, used by the Prisma CLI's config loader (`prisma` 6.13+), not by the app at runtime; npm's only offered fix is a breaking Prisma downgrade, so it's left until Prisma ships a fixed dependency.

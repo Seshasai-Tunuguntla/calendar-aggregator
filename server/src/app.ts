@@ -16,7 +16,7 @@ import { requireAuth } from './middleware/auth.ts';
 import { errorHandler, notFound } from './middleware/errorHandler.ts';
 import { DEMO_HOST } from './demo/demoData.ts';
 import { resetDemoIfStale } from './demo/resetDemo.ts';
-import { TRUST_PROXY_HOPS, createRateLimiter, type RateLimitOptions } from './middleware/rateLimit.ts';
+import { TRUST_PROXY_HOPS, clientKey, createRateLimiter, type RateLimitOptions } from './middleware/rateLimit.ts';
 import { requireSameOrigin } from './middleware/sameOrigin.ts';
 import { accountRouter } from './routes/account.ts';
 import { authRouter } from './routes/auth.ts';
@@ -51,6 +51,11 @@ export interface AppDeps {
    * the Vercel function turn it on; tests leave it off unless they're testing it.
    */
   resetDemoOnColdStart?: boolean;
+  /**
+   * Logs each API request's client address as the rate limiters see it. Only for checking a new
+   * deployment (LOG_CLIENT_IP=true on Vercel, then removed): addresses aren't logged otherwise.
+   */
+  logClientIp?: boolean;
 }
 
 const passThrough: RequestHandler = (_req, _res, next) => next();
@@ -68,6 +73,7 @@ export function createApp({
   beforeBookingLock,
   timeouts = TIMEOUTS,
   resetDemoOnColdStart = false,
+  logClientIp = false,
 }: AppDeps) {
   const app = express();
 
@@ -75,6 +81,13 @@ export function createApp({
   // (and the rate limiters' key) is the visitor's address.
   app.set('trust proxy', TRUST_PROXY_HOPS);
   app.disable('x-powered-by');
+  if (logClientIp) {
+    app.use('/api', (req, _res, next) => {
+      const header = (name: string) => JSON.stringify(req.headers[name] ?? null);
+      console.info(`client address: req.ip=${req.ip} limiter key=${clientKey(req)} x-forwarded-for=${header('x-forwarded-for')} x-real-ip=${header('x-real-ip')}`);
+      next();
+    });
+  }
   app.use(helmet());
   app.use(express.json({ limit: '100kb' }));
   // API responses can carry private data; no browser or shared cache should keep them, and no
