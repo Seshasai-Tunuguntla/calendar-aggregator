@@ -1,0 +1,17 @@
+{
+  "name": "@calendar-aggregator/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Zod schemas, inferred types and pure functions shared by the client and the server",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}

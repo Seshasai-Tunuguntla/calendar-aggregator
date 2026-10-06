@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    name: Typecheck, lint, tests and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # Node 24 LTS: runs the server's .ts files directly with built-in type stripping.
+          node-version: 24
+          cache: npm
+      # One install at the root sets up all three workspaces from the single lockfile.
+      # `npm ci` (not `npm install`): the lockfile includes the Linux builds of the native tools.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
