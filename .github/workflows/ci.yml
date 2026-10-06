@@ -37,6 +37,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      # WCAG AA contrast for every colour pair the components use (client/scripts/checkContrast.ts).
+      - run: npm run contrast
       # The server's test setup migrates this database (prisma migrate deploy) before any test runs.
       - run: npm test
         env:

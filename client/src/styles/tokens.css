@@ -1,0 +1,72 @@
+/* Calendar Aggregator: "Editorial" design (docs/design/README.md).
+   Cream paper, deep green ink, a large serif for headings only, thin rules instead of boxes.
+   Every colour, font, size and space in the app comes from a token below.
+
+   Contrast (WCAG AA) for every colour pair the components use is checked by
+   `npm run contrast --workspace client` (scripts/checkContrast.ts), in CI: text and muted text
+   4.5:1 or more, borders of controls and the focus ring 3:1 or more. */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --color-paper: #f6f1e7; /* the page */
+  --color-paper-deep: #ede5d3; /* wells: forms, sidebars */
+  --color-surface: #fffdf8; /* raised: inputs, slot buttons, menus */
+  --color-rule: #d6ccb6; /* decorative dividers (not text, not a control's edge) */
+
+  /* Text */
+  --color-ink: #1c2a22;
+  --color-ink-muted: #545f57;
+
+  /* The one accent: deep green. Links, primary buttons, the selected state, the focus ring. */
+  --color-accent: #1f4d36;
+  --color-accent-hover: #163a28;
+  --color-on-accent: #fbf8f1; /* text on the accent */
+  --color-accent-wash: #e3ece4; /* hover fill for slots and rows */
+
+  /* Edges of controls (inputs, checkboxes, slot buttons): 3:1 or more on every surface. */
+  --color-control-line: #7a705d;
+
+  /* Status: text colour on its own tinted surface, and on the page. */
+  --color-warning: #7f430b;
+  --color-warning-surface: #f7e6cb;
+  --color-danger: #9b2420;
+  --color-danger-surface: #f9e1dd;
+  --color-success: #1d5a37;
+  --color-success-surface: #dfeee3;
+  --color-info: #23476b;
+  --color-info-surface: #e1eaf3;
+
+  /* Type. The serif is self-hosted (Fraunces 600, Latin, about 18 kB) and used for headings only;
+     body text uses the system's sans-serif, so it costs no download. */
+  --font-heading: 'Fraunces', Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Times New Roman', serif;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-xs: 0.8125rem; /* 13px: eyebrows, fine print */
+  --text-sm: 0.9375rem; /* 15px */
+  --text-md: 1.0625rem; /* 17px: body */
+  --text-lg: 1.25rem; /* 20px */
+  --text-xl: 1.75rem; /* 28px: section headings */
+  --text-2xl: clamp(2rem, 1.4rem + 2.4vw, 3rem); /* page headings */
+
+  --leading-tight: 1.1;
+  --leading-body: 1.5;
+
+  /* Space, on a 4px base */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  --radius: 3px;
+  /* Every button and slot is at least this tall: a comfortable tap target. */
+  --tap: 2.75rem; /* 44px */
+  --page-width: 70rem;
+  --focus-ring: 3px solid var(--color-accent);
+}

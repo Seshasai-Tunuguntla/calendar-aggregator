@@ -58,8 +58,9 @@ sees one origin, as in production.
 npm run check
 ```
 
-Runs everything CI runs: typecheck, lint (warnings fail it), the tests of all three workspaces
-(the server's against the test database), and the client build.
+Runs everything CI runs: typecheck, lint (warnings fail it), the WCAG contrast check of the
+design tokens (`npm run contrast`), the tests of all three workspaces (the server's against the
+test database), and the client build.
 
 ### The pre-push hook
 

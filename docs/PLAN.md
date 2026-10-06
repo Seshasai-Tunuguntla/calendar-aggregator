@@ -273,8 +273,8 @@ goal; trade-off vs short caching to be explained).
 | 4 | Google OAuth: setup instructions, start/callback, PKCE, state, ID token verification, encrypted refresh tokens, refresh handling, disconnect; Google mocked in tests | Done |
 | 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | Done |
 | 6 | Availability rules, settings, event types, slots endpoint; "Delete my account" backend | Done |
-| 7 | Public booking: double-booking protection, Google event creation, manage token, cancel, reschedule, concurrency tests | Done (awaiting review) |
-| 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | |
+| 7 | Public booking: double-booking protection, Google event creation, manage token, cancel, reschedule, concurrency tests | Done |
+| 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | Done (awaiting review) |
 | 9 | Public booking frontend (guest flow end to end) | |
 | 10 | Self-resetting demo + tests | |
 | 11 | README for recruiters (diagrams, decisions, trade-offs, screenshots), Playwright smoke test | |
@@ -552,7 +552,7 @@ Every limit is in `src/bookings/timeouts.ts`, and a unit test checks they fit to
 
 Worst case for one booking request: read (6) + connection (3) + lock (5) + create (6) + withdraw (6) + database (2) = **28 s**, under the **60-second** maximum duration the API function gets on Vercel (phase 12; Vercel allows up to 300 s on every plan with Fluid compute, checked October 2026). **Tested with a slow fake Google** (answers delayed past the deadline, honouring the abort signal like a real request), on an app with shortened limits: event creation too slow -> 503 "nothing was booked" within the deadline, no booking, no event; created but answered too late -> the event is withdrawn; free/busy check too slow -> 503, nothing booked; a second guest kept waiting for the lock -> 503 "try again in a moment" while the first is booked; a cancellation that timed out keeps the booking and a retry finishes it; a reschedule that timed out after Google moved the event moves it back.
 
-**Mutation checks on the review additions:** 14 breaks (no overall deadline on a Google call; retrying with no time left; no lock-wait limit; the lock timeout not explained; the reschedule undo recorded only after the move; expired-access cancels not marked; the retry never removing the event, or not running on sign-in or on refresh; still-on-calendar bookings hidden from the host; the daily limit counting failures, not exempting the demo, using a 15-minute window, or removed): all 14 failed at least one test. Not covered by a test: the token refresh's share of a call's deadline (the OAuth request takes the same signal), because the stored access token is always fresh in these tests.
+**Mutation checks on the review additions:** 14 breaks (no overall deadline on a Google call; retrying with no time left; no lock-wait limit; the lock timeout not explained; the reschedule undo recorded only after the move; expired-access cancels not marked; the retry never removing the event, or not running on sign-in or on refresh; still-on-calendar bookings hidden from the host; the daily limit counting failures, not exempting the demo, using a 15-minute window, or removed): all 14 failed at least one test. The token refresh's share of a call's deadline is tested separately (closing a gap from the phase 7 review): a connection is seeded with an already-expired access token, so the call must refresh first; with the OAuth endpoint slow, the call ends at its limit (300 ms in the test) as `unavailable`, the connection stays `ACTIVE`, and letting the refresh ignore the deadline fails the test.
 - **Cache:** booking, cancelling and rescheduling clear the host's busy-time cache (tested: each test loads the slots first, so the cached copy would show the wrong time if it weren't cleared).
 - **Provider:** Google's 410 Gone (an event deleted on the host's calendar) is now `not_found` instead of a temporary failure; `moveEvent` and `eventIdFor` were added to both providers.
 
@@ -560,10 +560,50 @@ Worst case for one booking request: read (6) + connection (3) + lock (5) + creat
 
 25 deliberate breaks: no re-check inside the lock; no lock; the first check skipped, or without calendar busy times; the booking kept when Google fails; an orphaned event not withdrawn; the manage token stored in plain text; the booking calendar choice ignored, or shared calendars allowed as one; booking, cancelling or rescheduling not clearing the cache; started meetings cancellable; cancelling with Google down, not blocking; expired access blocking a cancel; cancelling not idempotent; a reschedule counting against itself, not moving the event, or treating a deleted event as temporary; the guest view always changeable; cancelled bookings in the host's list; another host's booking cancellable; Google's 410 treated as temporary; the booking limiter removed. 24 failed at least one test (one of them only after a first attempt at the mutation turned out not to change behaviour). The survivor is the 23P01 mapping, which no request can reach while every booking change takes the lock; its recogniser is tested on its own. Also untested for the same reason: moving an event back when a reschedule's commit fails after Google already moved it.
 
+## Phase 8 decisions (design and host pages)
+
+### The design: A, "Editorial" (author's choice)
+
+Three directions were mocked up (static pages, not committed): A Editorial (cream, deep green, large serif), B Bold neo-brutalist (thick borders, yellow and blue blocks), C Soft product (lilac, centred card). Screenshots and the reasons are in **docs/design/README.md**: A is calm and professional for someone booking a meeting, has the most identity, and is the furthest from both earlier projects. Two changes from the mockup, from the review:
+
+1. **Time slots are real buttons** (`.slot`): a 2px border in the control colour, a tinted fill and accent border on hover, the focus ring, and a solid accent with light text when picked (`aria-pressed="true"`); at least 44px tall. The style is in the design system now; the booking page (phase 9) uses it.
+2. **Serif for headings only, self-hosted:** Fraunces 600, Latin subset, from the `@fontsource/fraunces` npm package, so Vite bundles the file with the app and the browser never contacts a font service (checked in the browser: one 18 kB woff2 request to our own origin, no third-party requests; a test fails if any font-service URL appears in the page or styles). `font-display: swap` (the package's default) with a Georgia-based fallback stack. Body text is the system sans-serif, so it costs no download. (The package also ships a `.woff` fallback file in the build; no current browser fetches it.)
+
+### Design tokens
+
+`client/src/styles/tokens.css` holds every colour, font, size, space, the tap-target size (44px) and the focus ring; `app.css` uses only tokens. One light theme for now (the mockups had none; dark mode would mean a second set of colours, all of them re-checked).
+
+**Contrast is checked in CI**, ported from the Study Scheduler: `client/scripts/checkContrast.ts` reads the colour tokens straight from `tokens.css` and checks the 31 pairs the components use (text and muted text 4.5:1 on every surface, links and buttons, status text on its own surface and on the page, and 3:1 for control edges and the focus ring). It runs as `npm run contrast`, a CI step, and part of `npm run check` (so the pre-push hook runs it too). All 31 pass; the lowest is control edges on the deep paper at 3.9:1.
+
+### Host pages
+
+Built on React Router with one auth provider (`/api/auth/me`; a 401 from any later call sends the host to `/login`), a `useApi` hook for the load/error/reload states, and shared components for the three non-ready states every page has: **loading** (a labelled spinner, `role="status"`), **error** (the server's message and Try again) and **empty** (what to do next). Every response is parsed with the shared Zod schema, and forms validate with the same shared schemas the API uses, so messages match.
+
+- **Sign-in** (`/login`): Google (a full navigation, with the browser's time zone) and "Try as host"; the callback's `?error=` codes become plain messages (never the code or text from Google); after "Delete my account", what happened (Google access not revoked, events not removed).
+- **Dashboard**: the warnings asked for in reviews, each with its action:
+  - *Booking page not showing times* (phase 6 review): a new signed-in endpoint, **`GET /api/booking-page/status`**, runs the same busy lookup guests trigger through the same 60-second cache (so a dashboard visit costs at most one calendar read; tested), and on failure names the calendar or account and the fix: "can't be checked right now" (temporary, with Check again), "Reconnect Google" (access expired), or "untick it" (unreadable). It also reports whether hours and an active event type exist, for the setup prompts.
+  - *Reconnect Google* for any account whose access expired: a link to the connect flow with that account preselected (`hint`).
+  - *Cancelled, still on your calendar* (phase 7 review): those bookings listed apart from the upcoming ones, with Reconnect when access is the reason.
+  - Upcoming bookings in the host's time zone, cancel with an inline confirmation, Show more (keyset pages); the booking links with Copy.
+- **Calendars**: per account, its status (Reconnect when expired; Disconnect with confirmation, then whether Google access was revoked), each calendar's "counts as busy" box (disabled for unreadable ones, with the reason; "can't check right now" for unknown ones, where ticking checks again; the server's 409/503 message shown on the row), and "Put bookings here" for owned calendars. Refresh and Connect another account (not for the demo).
+- **Availability**: time zone, weekly hours (any number of ranges a day, 15-minute steps, 24:00 for the end of the day), buffers, notice, horizon and the daily limit, saved together; overlaps are caught before sending with the server's own message. Below, **what guests see next week** for the first active event type, from the public slots endpoint (saved hours only).
+- **Event types**: create (the link follows the title until edited), edit, turn on/off, delete with confirmation (the server's "has bookings, turn it off instead" shown), copy link.
+- **Account**: profile, Sign out, and **Delete my account**: what will happen, then type the handle to enable the button; the demo explains why it can't be deleted.
+- Not found and crash pages (a router error element) instead of a blank screen; a skip link; a Menu button for the navigation below 768px.
+
+### Checked in the browser, at 1280px and 375px
+
+Every page in its ready, loading, error and empty states (the latter three by having the page's own fetch answer slowly, fail or return nothing, then navigating within the app; the empty ones also for real, with a throwaway local host that was then deleted through the page). No page scrolls sideways at 375px in any state. Real flows run in the browser against the dev servers: demo sign-in and sign-out, creating an event type, and deleting an account (the database rows gone, the sign-in page saying what happened).
+
+**Found by those checks and fixed:** the Menu button showed at desktop width (the button style's `display` won over the rule hiding it); the demo notice touched the next section; after "Delete my account", the host layout's own redirect to `/login` dropped the message saying what happened (it now travels with the signed-out state); and the API reported "couldn't revoke Google access" for a user with no Google account at all (nothing to revoke now counts as done; tested).
+
+### Tests
+
+66 client tests (Vitest, Testing Library, the real routes in a memory router against a mocked API): each page's loading, error and empty states; all three booking-page warnings and their links; reconnect; still-on-calendar listed apart; cancelling only after confirmation; refused ticks showing the server's reason; saving hours in one request and catching overlaps before it; event type links from titles; deleting an account only with the handle typed, then the sign-in page saying what happened; sign-out; signed-out visitors and a mid-visit 401 sent to sign-in; and the self-hosted font. Server: 7 more for the status endpoint, 1 for the account fix, 2 for the phase 7 gap.
+
 ## Notes for later phases
 
-- **Phase 8, "cancelled, still on your calendar" (phase 7 review):** bookings with `stillOnCalendar` appear in `GET /api/bookings`; the dashboard shows them with a warning (and that reconnecting removes them).
-- **Phase 8, dashboard warning (asked for in the phase 6 review):** when the host's booking page is showing no times because a calendar that counts as busy can't be checked, the dashboard says so, naming the calendar and account (host-only) and what to do: "can't check right now" (temporary; try again), "reconnect <account>" (access expired or revoked), or "untick <calendar>" (unreadable). Backend: a signed-in status endpoint that runs the same busy lookup guests trigger (through the cache, so it costs no extra Google calls) and reports the `CalendarProviderError`'s kind and calendar.
+- **Phase 9:** the booking page uses the `.slot` buttons from the design system (phase 8 review: real buttons, visible borders, hover/focus/selected states, 44px targets) and adds "Try booking" to the sign-in page once it exists.
 
 - **Phase 12:** add `https://<production domain>/api/auth/google/callback` to the OAuth client's redirect URIs, and the five Google variables to Vercel (Production scope only).
 - **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.

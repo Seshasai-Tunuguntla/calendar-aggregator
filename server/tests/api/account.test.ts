@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { deleteAccountResponseSchema, eventTypeResponseSchema } from '@calendar-aggregator/shared';
@@ -150,6 +151,15 @@ describe('DELETE /api/account', () => {
     expect(deleteAccountResponseSchema.parse(res.body).revokedAtGoogle).toBe(false);
     expect(google.refreshTokensIssued.map((t) => google.isRevoked(t)).toSorted()).toEqual([false, true]);
     expect(await db.user.count()).toBe(0);
+  });
+
+  it("doesn't tell a user with no Google account to remove access at Google", async () => {
+    const user = await db.user.create({ data: { name: 'No Google', email: 'none@example.com', handle: 'no-google', timeZone: 'UTC' } });
+    const token = 'local-test-session-token-for-no-google-user-01';
+    await db.session.create({ data: { userId: user.id, tokenHash: createHash('sha256').update(token).digest('hex'), expiresAt: new Date(NOW.getTime() + 60_000) } });
+    browser.cookies.set('session', token);
+    const res = await browser.delete('/api/account', { confirmHandle: 'no-google' });
+    expect(deleteAccountResponseSchema.parse(res.body)).toEqual({ revokedAtGoogle: true, eventsNotDeleted: 0 });
   });
 
   it('needs the Origin header (CSRF) and a signed-in user', async () => {

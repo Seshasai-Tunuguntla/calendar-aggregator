@@ -18,8 +18,9 @@
     "lint": "oxlint --deny-warnings",
     "test": "npm run test --workspaces",
     "build": "npm run build --workspace client",
-    "check": "npm run typecheck && npm run lint && npm test && npm run build",
-    "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true"
+    "check": "npm run typecheck && npm run lint && npm run contrast && npm test && npm run build",
+    "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true",
+    "contrast": "npm run contrast --workspace client"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

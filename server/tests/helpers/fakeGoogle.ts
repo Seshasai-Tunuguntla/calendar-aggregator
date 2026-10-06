@@ -96,6 +96,8 @@ export class FakeGoogle {
    * caller gives up first (its AbortSignal), as with a real network request. `afterApplying`: the
    * change happens at once and only the answer is late (Google acted, the caller timed out).
    */
+  /** Slow answers from the OAuth token endpoint (refreshes and code exchanges), in ms, each used once; honours the caller's AbortSignal. */
+  readonly tokenDelays: number[] = [];
   readonly calendarDelays: { ms: number; only?: 'calendarList' | 'freeBusy' | 'events'; afterApplying?: boolean }[] = [];
   readonly calendarFailures: (
     | { status: number; reason: string; retryAfter?: string; only?: 'calendarList' | 'freeBusy' | 'events'; afterApplying?: boolean }
@@ -195,6 +197,8 @@ export class FakeGoogle {
       throw new TypeError('fetch failed');
     }
     const endpoint = url === GOOGLE_ENDPOINTS.token ? 'token' : url === GOOGLE_ENDPOINTS.revocation ? 'revoke' : null;
+    const tokenDelay = endpoint === 'token' ? this.tokenDelays.shift() : undefined;
+    if (tokenDelay !== undefined) await waitOrAbort(tokenDelay, init?.signal);
     if (failure && failure.endpoint === endpoint) {
       this.failNext = null;
       return Response.json({ error: failure.error }, { status: failure.status });

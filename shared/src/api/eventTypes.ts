@@ -8,9 +8,10 @@ export const eventTypeSlugSchema = z
     'The link can use lowercase letters, digits and hyphens (2 to 60 characters, not starting or ending with a hyphen)',
   );
 
+// In the order a form shows them, so the first error reported is the first field's.
 const fields = {
-  slug: eventTypeSlugSchema,
   title: z.string().trim().min(1, 'Give the event type a title').max(100, 'Titles can be at most 100 characters'),
+  slug: eventTypeSlugSchema,
   description: z.string().trim().max(1000, 'Descriptions can be at most 1000 characters'),
   // The same ranges as the database's CHECK.
   durationMinutes: z.int().min(5, 'Events last 5 to 720 minutes').max(720, 'Events last 5 to 720 minutes'),

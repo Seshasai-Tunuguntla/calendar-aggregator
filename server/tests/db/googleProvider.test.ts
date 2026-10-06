@@ -262,6 +262,31 @@ describe('error handling', () => {
   });
 });
 
+// A connection whose stored access token has already expired, so every call refreshes it first.
+const expireAccessToken = () => db.calendarConnection.update({ where: { id: connection.id }, data: { accessTokenExpiresAt: new Date(Date.now() - 60_000) } });
+const withLimit = (callBudgetMs: number) => new GoogleCalendarProvider({ tokens, fetch: google.fetch, sleep: async () => {}, callBudgetMs });
+
+describe('the time limit on a call', () => {
+  const day = range('2026-10-12T00:00:00Z', '2026-10-13T00:00:00Z');
+  it('refreshes an expired access token first, inside the same call', async () => {
+    await expireAccessToken();
+    await expect(withLimit(300).getBusyIntervals(connection, ['host@gmail.com'], day)).resolves.toHaveLength(1);
+    expect(google.requests.map((r) => r.form['grant_type'] ?? 'calendar')).toEqual(['refresh_token', 'calendar']);
+  });
+
+  it('counts the refresh against the call\'s time limit: a slow refresh ends the call at the limit', async () => {
+    await expireAccessToken();
+    google.tokenDelays.push(5_000);
+    const started = Date.now();
+    await expect(withLimit(300).getBusyIntervals(connection, ['host@gmail.com'], day)).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(google.calendarRequests).toHaveLength(0);
+    // Slow isn't revoked: the connection still works afterwards.
+    expect(await db.calendarConnection.findUniqueOrThrow({ where: { id: connection.id } })).toMatchObject({ status: 'ACTIVE' });
+    await expect(withLimit(300).getBusyIntervals(connection, ['host@gmail.com'], day)).resolves.toHaveLength(1);
+  });
+});
+
 // The connection's Calendar rows, by name.
 const rows = () => db.calendar.findMany({ where: { connectionId: connection.id }, orderBy: { name: 'asc' } });
 

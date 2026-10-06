@@ -72,7 +72,8 @@ export function accountRouter({
     // 4. The session row is already gone (cascade); this clears the browser's cookie.
     const cookie = sessionCookie(production);
     res.clearCookie(cookie.name, cookie.options);
-    res.json({ revokedAtGoogle: revoked.length > 0 && revoked.every(Boolean), eventsNotDeleted } satisfies DeleteAccountResponse);
+    // With no Google account to revoke, there's nothing the user has to clean up at Google.
+    res.json({ revokedAtGoogle: revoked.every(Boolean), eventsNotDeleted } satisfies DeleteAccountResponse);
   });
 
   return router;

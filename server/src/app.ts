@@ -20,6 +20,7 @@ import { requireSameOrigin } from './middleware/sameOrigin.ts';
 import { accountRouter } from './routes/account.ts';
 import { authRouter } from './routes/auth.ts';
 import { availabilityRouter } from './routes/availability.ts';
+import { bookingPageRouter } from './routes/bookingPage.ts';
 import { bookingsRouter } from './routes/bookings.ts';
 import { calendarsRouter } from './routes/calendars.ts';
 import { connectionsRouter } from './routes/connections.ts';
@@ -101,6 +102,7 @@ export function createApp({
   app.use('/api/availability', availabilityRouter({ db, requireAuth: signedIn }));
   app.use('/api/event-types', eventTypesRouter({ db, requireAuth: signedIn }));
   app.use('/api/account', accountRouter({ db, requireAuth: signedIn, providers, google: googleRevoker, production, now }));
+  app.use('/api/booking-page', bookingPageRouter({ db, requireAuth: signedIn, providers, now }));
   app.use('/api/bookings', bookingsRouter({ db, requireAuth: signedIn, providers, now, timeouts }));
   // Every public request counts once against one limit: every page view and week a guest flips
   // through can read the host's calendars at Google, so 300 per client per 15 minutes is generous

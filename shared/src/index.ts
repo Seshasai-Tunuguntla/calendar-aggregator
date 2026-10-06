@@ -11,5 +11,6 @@ export * from './api/eventTypes.ts';
 export * from './api/publicBooking.ts';
 export * from './api/account.ts';
 export * from './api/bookings.ts';
+export * from './api/bookingPage.ts';
 export * from './time/localTime.ts';
 export * from './time/timeZone.ts';
