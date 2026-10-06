@@ -1,6 +1,7 @@
 import type { BusyAccess } from '@prisma/client';
 import { z } from 'zod';
 import { DAY_MS, type Interval } from '@calendar-aggregator/shared/slots';
+import { TIMEOUTS } from '../bookings/timeouts.ts';
 import type { GoogleTokens } from '../google/tokens.ts';
 import {
   CalendarProviderError,
@@ -21,7 +22,12 @@ import {
 // - 403 insufficientPermissions: a scope is missing; the connection needs reconnecting ('auth').
 // - 403 rateLimitExceeded / userRateLimitExceeded, 429, 5xx, network errors: retried twice with
 //   exponential backoff (or Retry-After), then 'rate_limited' or 'unavailable'.
-// - 404 / other 403: the calendar or event doesn't exist or isn't reachable: 'not_found'.
+// - 404, 410 (deleted) and other 403s: the calendar or event doesn't exist or isn't reachable:
+//   'not_found'.
+// - Every call has one deadline (TIMEOUTS.googleCallMs, 6 s) covering the token refresh, every
+//   attempt and the waits between them; each attempt gets at most half of it, so a hung first try
+//   still leaves time to retry. Past the deadline the call fails as 'unavailable' (temporary).
+//   Booking changes call Google inside a database transaction, which must outlast this.
 
 export const CALENDAR_API = 'https://www.googleapis.com/calendar/v3';
 
@@ -76,11 +82,30 @@ export class GoogleCalendarProvider implements CalendarProvider {
   readonly #tokens: GoogleTokens;
   readonly #fetch: typeof fetch;
   readonly #sleep: Sleep;
+  readonly #callBudgetMs: number;
 
-  constructor({ tokens, fetch: fetchFn, sleep = realSleep }: { tokens: GoogleTokens; fetch: typeof fetch; sleep?: Sleep }) {
+  constructor({
+    tokens,
+    fetch: fetchFn,
+    sleep = realSleep,
+    callBudgetMs = TIMEOUTS.googleCallMs,
+  }: {
+    tokens: GoogleTokens;
+    fetch: typeof fetch;
+    sleep?: Sleep;
+    callBudgetMs?: number;
+  }) {
     this.#tokens = tokens;
     this.#fetch = fetchFn;
     this.#sleep = sleep;
+    this.#callBudgetMs = callBudgetMs;
+  }
+
+  // Waits before a retry, unless the wait would leave no time for it: then false.
+  async #pauseBeforeRetry(waitMs: number, deadline: number): Promise<boolean> {
+    if (Date.now() + waitMs >= deadline) return false;
+    await this.#sleep(waitMs);
+    return true;
   }
 
   async listCalendars(connection: ConnectionRef): Promise<ExternalCalendar[]> {
@@ -182,6 +207,23 @@ export class GoogleCalendarProvider implements CalendarProvider {
     return { externalEventId: parse(createdEventSchema, body).id };
   }
 
+  eventIdFor(idempotencyKey: string): string {
+    return googleEventId(idempotencyKey);
+  }
+
+  // events.patch with only the times, so nothing else the host changed on the event is lost.
+  // sendUpdates=all: Google emails the guest the new time.
+  async moveEvent(connection: ConnectionRef, externalCalendarId: string, externalEventId: string, start: Date, end: Date): Promise<void> {
+    await this.#call(
+      connection,
+      'PATCH',
+      `/calendars/${encodeURIComponent(externalCalendarId)}/events/${encodeURIComponent(externalEventId)}?sendUpdates=all`,
+      { start: { dateTime: start.toISOString() }, end: { dateTime: end.toISOString() } },
+      {},
+      externalCalendarId,
+    );
+  }
+
   // sendUpdates=all: Google tells the guest it's cancelled. 404 and 410 (already deleted) count
   // as success, so deleting is idempotent.
   async deleteEvent(connection: ConnectionRef, externalCalendarId: string, externalEventId: string): Promise<void> {
@@ -197,7 +239,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
 
   async #call(
     connection: ConnectionRef,
-    method: 'GET' | 'POST' | 'DELETE',
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
     requestBody?: unknown,
     { expected = [] }: { expected?: number[] } = {},
@@ -206,9 +248,14 @@ export class GoogleCalendarProvider implements CalendarProvider {
     if (connection.provider !== 'GOOGLE') throw new Error(`GoogleCalendarProvider can't serve a ${connection.provider} connection`);
     const about = externalCalendarId === undefined ? {} : { externalCalendarId };
 
-    let token = await this.#tokens.accessToken(connection.id);
+    const deadline = Date.now() + this.#callBudgetMs;
+    const callSignal = AbortSignal.timeout(this.#callBudgetMs);
+    const tooSlow = () => new CalendarProviderError('unavailable', `Google Calendar didn't answer within ${this.#callBudgetMs} ms`, about);
+
+    let token = await this.#tokens.accessToken(connection.id, { signal: callSignal });
     let refreshedAfter401 = false;
     for (let attempt = 0; ; attempt++) {
+      if (Date.now() >= deadline) throw tooSlow();
       let response: Response;
       try {
         response = await this.#fetch(`${CALENDAR_API}${path}`, {
@@ -219,14 +266,11 @@ export class GoogleCalendarProvider implements CalendarProvider {
             ...(requestBody === undefined ? {} : { 'Content-Type': 'application/json' }),
           },
           ...(requestBody === undefined ? {} : { body: JSON.stringify(requestBody) }),
-          signal: AbortSignal.timeout(10_000),
+          signal: AbortSignal.any([callSignal, AbortSignal.timeout(this.#callBudgetMs / 2)]),
         });
       } catch {
-        if (attempt < MAX_RETRIES) {
-          await this.#sleep(backoffMs(attempt));
-          continue;
-        }
-        throw new CalendarProviderError('unavailable', "Couldn't reach Google Calendar", about);
+        if (attempt < MAX_RETRIES && (await this.#pauseBeforeRetry(backoffMs(attempt), deadline))) continue;
+        throw Date.now() >= deadline ? tooSlow() : new CalendarProviderError('unavailable', "Couldn't reach Google Calendar", about);
       }
 
       if (response.ok || expected.includes(response.status)) {
@@ -238,7 +282,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
       if (response.status === 401) {
         if (refreshedAfter401) throw new CalendarProviderError('auth', 'Google rejected the refreshed access token', about);
         refreshedAfter401 = true;
-        token = await this.#tokens.accessToken(connection.id, { forceRefresh: true });
+        token = await this.#tokens.accessToken(connection.id, { forceRefresh: true, signal: callSignal });
         continue;
       }
       if (response.status === 403 && (reasons.has('insufficientPermissions') || reasons.has('ACCESS_TOKEN_SCOPE_INSUFFICIENT'))) {
@@ -248,14 +292,12 @@ export class GoogleCalendarProvider implements CalendarProvider {
 
       const rateLimited = response.status === 429 || (response.status === 403 && [...reasons].some((r) => RATE_LIMIT_REASONS.has(r)));
       if (rateLimited || response.status >= 500) {
-        if (attempt < MAX_RETRIES) {
-          await this.#sleep(retryAfterMs(response) ?? backoffMs(attempt));
-          continue;
-        }
+        if (attempt < MAX_RETRIES && (await this.#pauseBeforeRetry(retryAfterMs(response) ?? backoffMs(attempt), deadline))) continue;
         throw new CalendarProviderError(rateLimited ? 'rate_limited' : 'unavailable', `Google Calendar answered ${response.status}`, about);
       }
-      if (response.status === 403 || response.status === 404) {
-        throw new CalendarProviderError('not_found', `Google Calendar answered ${response.status}: not found or no access`, about);
+      // 410: the event was deleted (on the host's calendar, for example).
+      if (response.status === 403 || response.status === 404 || response.status === 410) {
+        throw new CalendarProviderError('not_found', `Google Calendar answered ${response.status}: not found, gone or no access`, about);
       }
       throw new CalendarProviderError('unavailable', `Google Calendar answered ${response.status}`, about);
     }

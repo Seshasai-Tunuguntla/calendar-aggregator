@@ -58,10 +58,11 @@ export class GoogleTokens {
   }
 
   // A usable access token for a Google connection, refreshed first if it's (nearly) expired, or
-  // always with forceRefresh (when Google rejected the one we thought was valid).
+  // always with forceRefresh (when Google rejected the one we thought was valid). `signal` stops a
+  // refresh when the caller's deadline passes.
   // Throws CalendarProviderError: 'auth' when the connection needs reconnecting (and marks it so),
   // 'unavailable' when Google can't be reached.
-  async accessToken(connectionId: string, { forceRefresh = false }: { forceRefresh?: boolean } = {}): Promise<string> {
+  async accessToken(connectionId: string, { forceRefresh = false, signal }: { forceRefresh?: boolean; signal?: AbortSignal } = {}): Promise<string> {
     const connection = await this.#db.calendarConnection.findUniqueOrThrow({ where: { id: connectionId } });
     if (connection.provider !== 'GOOGLE') throw new Error('Not a Google connection');
     if (connection.status === 'NEEDS_RECONNECT') throw new CalendarProviderError('auth', 'Google access needs reconnecting');
@@ -81,7 +82,7 @@ export class GoogleTokens {
 
     let refreshed;
     try {
-      refreshed = await this.#oauth.refreshAccessToken(refreshToken);
+      refreshed = await this.#oauth.refreshAccessToken(refreshToken, signal);
     } catch (error) {
       if (error instanceof GoogleOAuthError && error.isInvalidGrant) {
         // Revoked by the user, expired (7 days in Google's Testing mode), or the password changed.

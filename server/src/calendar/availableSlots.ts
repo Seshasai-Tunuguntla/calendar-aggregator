@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { DAY_MS, MINUTE_MS, computeSlots, type Interval } from '@calendar-aggregator/shared/slots';
 import type { Db } from '../db.ts';
 import { cachedBusyIntervals } from './busyCache.ts';
@@ -19,69 +20,83 @@ export interface SlotEventType {
   slotStepMinutes: number;
 }
 
+interface SlotQuery {
+  host: SlotHost;
+  eventType: SlotEventType;
+  /** Only slots starting in [range.start, range.end) are returned. */
+  range: Interval;
+  now: number;
+}
+
 // A local day is at most 25 hours, so this margin around the slot window covers every local day
 // a slot can fall on, for counting bookings per day.
 const DAY_COUNT_MARGIN_MS = 2 * DAY_MS;
 
-// The bookable slots of one event type that start in `range`: gathers the inputs (rules, busy
-// times from every calendar that counts as busy, confirmed bookings) and runs the pure slot
-// algorithm.
-//
-// Busy times are fetched only for the part of `range` that minimum notice and the horizon leave
-// open, widened by the buffers and the event's length (the time a slot at either edge needs
-// clear), so a far-future or past range costs no calendar requests at all. They come through a
-// 60-second cache (busyCache.ts), so many guests on one page cause one read of the calendars.
+// The busy time that matters for slots starting in `range`: only the part that minimum notice and
+// the horizon leave open, widened by the buffers and the event's length (what a slot at either
+// edge needs clear). Null when no slot can start in `range` at all, so a past or far-future range
+// costs no calendar requests.
+export function busyRangeFor({ host, eventType, range, now }: SlotQuery): Interval | null {
+  const earliest = Math.max(range.start, now + host.minNoticeMinutes * MINUTE_MS);
+  const latest = Math.min(range.end - 1, now + host.horizonDays * DAY_MS);
+  if (latest < earliest) return null;
+  return {
+    start: earliest - host.bufferBeforeMinutes * MINUTE_MS,
+    end: latest + eventType.durationMinutes * MINUTE_MS + host.bufferAfterMinutes * MINUTE_MS,
+  };
+}
+
+// The bookable slots of one event type that start in `range`, for the public booking page: busy
+// times through the 60-second cache (busyCache.ts), so many guests on one page cause one read of
+// the calendars.
 //
 // Fails closed: if any calendar that counts as busy can't be read (needs reconnecting,
 // unreadable, provider down), the provider's CalendarProviderError propagates and no slots are
 // offered, because offering them could double-book the host.
-export async function availableSlots({
+export async function availableSlots({ db, providers, ...query }: SlotQuery & { db: Db; providers: CalendarProviders }): Promise<Interval[]> {
+  const busyRange = busyRangeFor(query);
+  if (!busyRange) return [];
+  if ((await db.availabilityRule.count({ where: { userId: query.host.id } })) === 0) return [];
+
+  const busy = await cachedBusyIntervals({
+    db,
+    hostId: query.host.id,
+    range: busyRange,
+    now: query.now,
+    load: (window) => readBusyIntervals(db, providers, query.host.id, window),
+  });
+  return slotsWithBusy({ db, busy, ...query });
+}
+
+// Runs the slot algorithm with the given busy times and the host's rules and confirmed bookings
+// as `db` sees them now. Bookings are always read fresh, never cached: a booking made a second ago
+// must block its time. Inside the booking lock, `db` is that transaction. `excludeBookingId`
+// leaves one booking out (the one being rescheduled, so it doesn't block or count against itself).
+export async function slotsWithBusy({
   db,
-  providers,
+  busy,
   host,
   eventType,
   range,
   now,
-}: {
-  db: Db;
-  providers: CalendarProviders;
-  host: SlotHost;
-  eventType: SlotEventType;
-  range: Interval;
-  now: number;
-}): Promise<Interval[]> {
-  const earliest = Math.max(range.start, now + host.minNoticeMinutes * MINUTE_MS);
-  const latest = Math.min(range.end - 1, now + host.horizonDays * DAY_MS);
-  if (latest < earliest) return [];
-
-  const duration = eventType.durationMinutes * MINUTE_MS;
-  const busyRange = {
-    start: earliest - host.bufferBeforeMinutes * MINUTE_MS,
-    end: latest + duration + host.bufferAfterMinutes * MINUTE_MS,
-  };
-
+  excludeBookingId,
+}: SlotQuery & { db: Prisma.TransactionClient; busy: readonly Interval[]; excludeBookingId?: string }): Promise<Interval[]> {
+  const busyRange = busyRangeFor({ host, eventType, range, now });
+  if (!busyRange) return [];
   const [rules, bookings] = await Promise.all([
     db.availabilityRule.findMany({ where: { userId: host.id }, select: { weekday: true, startMinute: true, endMinute: true } }),
-    // Always read fresh, never cached: a booking made a second ago must block its time.
     db.booking.findMany({
       where: {
         hostId: host.id,
         status: 'CONFIRMED',
         startsAt: { lt: new Date(busyRange.end + DAY_COUNT_MARGIN_MS) },
         endsAt: { gt: new Date(busyRange.start - DAY_COUNT_MARGIN_MS) },
+        ...(excludeBookingId ? { id: { not: excludeBookingId } } : {}),
       },
       select: { startsAt: true, endsAt: true },
     }),
   ]);
   if (rules.length === 0) return [];
-
-  const busy = await cachedBusyIntervals({
-    db,
-    hostId: host.id,
-    range: busyRange,
-    now,
-    load: (window) => readBusyIntervals(db, providers, host.id, window),
-  });
 
   return computeSlots({
     rules,
@@ -100,8 +115,9 @@ export async function availableSlots({
   });
 }
 
-// Busy time from every calendar that counts as busy, asking each connection's provider in parallel.
-async function readBusyIntervals(db: Db, providers: CalendarProviders, hostId: string, window: Interval): Promise<Interval[]> {
+// Busy time from every calendar that counts as busy, asking each connection's provider in
+// parallel. Uncached: bookings call this directly to check a slot against fresh data.
+export async function readBusyIntervals(db: Db, providers: CalendarProviders, hostId: string, window: Interval): Promise<Interval[]> {
   const calendars = await db.calendar.findMany({
     where: { countsAsBusy: true, connection: { userId: hostId } },
     select: { externalCalendarId: true, connection: { select: { id: true, userId: true, provider: true } } },

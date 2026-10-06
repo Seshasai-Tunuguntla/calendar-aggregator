@@ -84,6 +84,21 @@ export class DemoCalendarProvider implements CalendarProvider {
     return { externalEventId: created.id };
   }
 
+  eventIdFor(idempotencyKey: string): string {
+    return idempotencyKey;
+  }
+
+  async moveEvent(connection: ConnectionRef, externalCalendarId: string, externalEventId: string, start: Date, end: Date): Promise<void> {
+    assertDemo(connection);
+    const moved = UUID.test(externalEventId)
+      ? await this.#db.demoBusyEvent.updateMany({
+          where: { id: externalEventId, calendar: { connectionId: connection.id, externalCalendarId } },
+          data: { startsAt: start, endsAt: end },
+        })
+      : { count: 0 };
+    if (moved.count === 0) throw new CalendarProviderError('not_found', 'Event not found', { externalCalendarId });
+  }
+
   async deleteEvent(connection: ConnectionRef, externalCalendarId: string, externalEventId: string): Promise<void> {
     assertDemo(connection);
     // Not a demo event id at all: nothing to delete (and Postgres would reject it as a uuid).

@@ -11,13 +11,16 @@ import { GoogleTokens } from './google/tokens.ts';
 import { DemoCalendarProvider } from './calendar/demoProvider.ts';
 import { GoogleCalendarProvider } from './calendar/googleProvider.ts';
 import type { CalendarProviders } from './calendar/syncCalendars.ts';
+import { TIMEOUTS, type Timeouts } from './bookings/timeouts.ts';
 import { requireAuth } from './middleware/auth.ts';
 import { errorHandler, notFound } from './middleware/errorHandler.ts';
-import { TRUST_PROXY_HOPS, createRateLimiter } from './middleware/rateLimit.ts';
+import { DEMO_HOST } from './demo/demoData.ts';
+import { TRUST_PROXY_HOPS, createRateLimiter, type RateLimitOptions } from './middleware/rateLimit.ts';
 import { requireSameOrigin } from './middleware/sameOrigin.ts';
 import { accountRouter } from './routes/account.ts';
 import { authRouter } from './routes/auth.ts';
 import { availabilityRouter } from './routes/availability.ts';
+import { bookingsRouter } from './routes/bookings.ts';
 import { calendarsRouter } from './routes/calendars.ts';
 import { connectionsRouter } from './routes/connections.ts';
 import { eventTypesRouter } from './routes/eventTypes.ts';
@@ -37,6 +40,10 @@ export interface AppDeps {
    * Google: their own fetch and signing keys.
    */
   google?: { config: GoogleAuthConfig; fetch?: typeof fetch; jwks?: JWTVerifyGetKey; sleep?: (ms: number) => Promise<void> } | null;
+  /** Tests only: lines up concurrent bookings just before they take the host's lock. */
+  beforeBookingLock?: () => Promise<void>;
+  /** The time limits of booking changes and Google calls (bookings/timeouts.ts); tests shorten them. */
+  timeouts?: Timeouts;
 }
 
 const passThrough: RequestHandler = (_req, _res, next) => next();
@@ -45,7 +52,15 @@ const passThrough: RequestHandler = (_req, _res, next) => next();
 // can wrap it. There is no CORS middleware on purpose: the browser only ever talks to the API on
 // its own origin (Vite proxies /api in development, and one Vercel project serves both in
 // production), which also keeps the session cookie first-party.
-export function createApp({ db, production = isProduction(), now = () => new Date(), rateLimits = true, google = null }: AppDeps) {
+export function createApp({
+  db,
+  production = isProduction(),
+  now = () => new Date(),
+  rateLimits = true,
+  google = null,
+  beforeBookingLock,
+  timeouts = TIMEOUTS,
+}: AppDeps) {
   const app = express();
 
   // In production the API runs as a Vercel Function behind Vercel's edge, one proxy hop, so req.ip
@@ -61,13 +76,14 @@ export function createApp({ db, production = isProduction(), now = () => new Dat
   });
   app.use('/api', requireSameOrigin);
 
-  const limiter = (name: string, limit: number) => (rateLimits ? createRateLimiter({ db, name, limit }) : passThrough);
+  const limiter = (name: string, limit: number, options: RateLimitOptions = {}) =>
+    rateLimits ? createRateLimiter({ db, name, limit, ...options }) : passThrough;
 
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok' } satisfies HealthResponse);
   });
 
-  const googleDeps = google ? createGoogleDeps(db, google, now) : null;
+  const googleDeps = google ? createGoogleDeps(db, google, now, timeouts) : null;
   const googleRevoker = googleDeps && { oauth: googleDeps.oauth, keyring: googleDeps.config.keyring };
   const providers: CalendarProviders = {
     DEMO: new DemoCalendarProvider(db),
@@ -85,9 +101,32 @@ export function createApp({ db, production = isProduction(), now = () => new Dat
   app.use('/api/availability', availabilityRouter({ db, requireAuth: signedIn }));
   app.use('/api/event-types', eventTypesRouter({ db, requireAuth: signedIn }));
   app.use('/api/account', accountRouter({ db, requireAuth: signedIn, providers, google: googleRevoker, production, now }));
-  // Every page view and week a guest flips through is a request, and each one reads the host's
-  // calendars at Google: 300 per client per 15 minutes is generous for people, not for scripts.
-  app.use('/api/public', publicBookingRouter({ db, providers, now, limiter: limiter('public', 300) }));
+  app.use('/api/bookings', bookingsRouter({ db, requireAuth: signedIn, providers, now, timeouts }));
+  // Every public request counts once against one limit: every page view and week a guest flips
+  // through can read the host's calendars at Google, so 300 per client per 15 minutes is generous
+  // for people, not for scripts. Making, moving or cancelling a booking writes to the host's
+  // calendar, so those also count against a stricter 10. And because every booking makes Google
+  // email an invitation to whatever address the guest typed, each client can make at most 10
+  // bookings a day (successful ones; demo bookings send no email and don't count). README: known
+  // trade-offs.
+  app.use('/api/public', limiter('public', 300));
+  app.use(
+    '/api/public',
+    publicBookingRouter({
+      db,
+      providers,
+      now,
+      timeouts,
+      beforeBookingLock,
+      bookingLimiter: limiter('booking', 10),
+      dailyBookingLimiter: limiter('booking-daily', 10, {
+        windowMs: 24 * 60 * 60 * 1000,
+        countSuccessesOnly: true,
+        skip: (req) => req.params['handle'] === DEMO_HOST.handle,
+        message: "You've made as many bookings as one connection can make in a day. Please try again tomorrow.",
+      }),
+    }),
+  );
 
   app.use(notFound);
   app.use(errorHandler);
@@ -95,7 +134,7 @@ export function createApp({ db, production = isProduction(), now = () => new Dat
   return app;
 }
 
-function createGoogleDeps(db: Db, google: NonNullable<AppDeps['google']>, now: () => Date) {
+function createGoogleDeps(db: Db, google: NonNullable<AppDeps['google']>, now: () => Date, timeouts: Timeouts) {
   const fetchFn = google.fetch ?? fetch;
   const oauth = createGoogleOAuthClient(google.config, fetchFn);
   const tokens = new GoogleTokens({ db, oauth, keyring: google.config.keyring, now });
@@ -104,6 +143,6 @@ function createGoogleDeps(db: Db, google: NonNullable<AppDeps['google']>, now: (
     oauth,
     verifyIdToken: createIdTokenVerifier({ clientId: google.config.clientId, ...(google.jwks ? { jwks: google.jwks } : {}) }),
     tokens,
-    calendarProvider: new GoogleCalendarProvider({ tokens, fetch: fetchFn, ...(google.sleep ? { sleep: google.sleep } : {}) }),
+    calendarProvider: new GoogleCalendarProvider({ tokens, fetch: fetchFn, callBudgetMs: timeouts.googleCallMs, ...(google.sleep ? { sleep: google.sleep } : {}) }),
   };
 }

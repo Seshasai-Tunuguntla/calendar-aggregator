@@ -12,6 +12,7 @@ const HAND_WRITTEN_CONSTRAINTS: Record<string, string> = {
     `EXCLUDE USING gist ("hostId" WITH =, tstzrange("startsAt", "endsAt", '[)'::text) WITH &&) WHERE ((status = 'CONFIRMED'::"BookingStatus"))`,
   Booking_ends_after_start_check: 'CHECK (("endsAt" > "startsAt"))',
   Booking_cancelled_at_check: `CHECK (((status = 'CANCELLED'::"BookingStatus") = ("cancelledAt" IS NOT NULL)))`,
+  Booking_still_on_calendar_check: `CHECK (((NOT "stillOnCalendar") OR (status = 'CANCELLED'::"BookingStatus")))`,
   AvailabilityRule_no_overlap: 'EXCLUDE USING gist ("userId" WITH =, weekday WITH =, int4range("startMinute", "endMinute") WITH &&)',
   AvailabilityRule_weekday_check: 'CHECK (((weekday >= 1) AND (weekday <= 7)))',
   AvailabilityRule_minutes_check: 'CHECK (((0 <= "startMinute") AND ("startMinute" < "endMinute") AND ("endMinute" <= 1440)))',
@@ -133,6 +134,13 @@ describe('other booking constraints', () => {
     const booking = await book('2026-10-12T09:00Z', '2026-10-12T09:30Z');
     expect(await violation(db.booking.update({ where: { id: booking.id }, data: { status: 'CANCELLED' } }))).toContain('Booking_cancelled_at_check');
     expect(await violation(db.booking.update({ where: { id: booking.id }, data: { cancelledAt: new Date() } }))).toContain('Booking_cancelled_at_check');
+  });
+
+  it('only lets a cancelled booking be "still on the calendar"', async () => {
+    const { book } = await hostWithEventType();
+    const booking = await book('2026-10-12T09:00Z', '2026-10-12T09:30Z');
+    expect(await violation(db.booking.update({ where: { id: booking.id }, data: { stillOnCalendar: true } }))).toContain('Booking_still_on_calendar_check');
+    await db.booking.update({ where: { id: booking.id }, data: { status: 'CANCELLED', cancelledAt: new Date(), stillOnCalendar: true } });
   });
 
   it("rejects a booking whose hostId isn't the event type's owner (composite foreign key)", async () => {

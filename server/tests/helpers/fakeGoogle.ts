@@ -91,7 +91,17 @@ export class FakeGoogle {
    * Calendar API responses to give before behaving normally: each is used once, in order. `only`
    * limits one to an endpoint, e.g. to let the calendar list work while freeBusy fails.
    */
-  readonly calendarFailures: ({ status: number; reason: string; retryAfter?: string; only?: 'calendarList' | 'freeBusy' | 'events' } | 'network')[] = [];
+  /**
+   * Slow Calendar API answers, each used once, in order: the answer comes after `ms`, unless the
+   * caller gives up first (its AbortSignal), as with a real network request. `afterApplying`: the
+   * change happens at once and only the answer is late (Google acted, the caller timed out).
+   */
+  readonly calendarDelays: { ms: number; only?: 'calendarList' | 'freeBusy' | 'events'; afterApplying?: boolean }[] = [];
+  readonly calendarFailures: (
+    | { status: number; reason: string; retryAfter?: string; only?: 'calendarList' | 'freeBusy' | 'events'; afterApplying?: boolean }
+    | 'network'
+  )[] = [];
+
   readonly #consented = new Set<string>();
 
   private constructor(privateKey: CryptoKey, otherKey: CryptoKey, jwks: JWTVerifyGetKey) {
@@ -163,7 +173,19 @@ export class FakeGoogle {
 
   readonly fetch: typeof fetch = async (input, init) => {
     const url = String(input);
-    if (url.startsWith(CALENDAR_API)) return this.#calendarApi(url, init);
+    if (url.startsWith(CALENDAR_API)) {
+      const endpoint = url.includes('/calendarList') ? 'calendarList' : url.includes('/freeBusy') ? 'freeBusy' : 'events';
+      const index = this.calendarDelays.findIndex((d) => !d.only || d.only === endpoint);
+      const [delay] = index === -1 ? [] : this.calendarDelays.splice(index, 1);
+      if (!delay) return this.#calendarApi(url, init);
+      if (delay.afterApplying) {
+        const response = await this.#calendarApi(url, init);
+        await waitOrAbort(delay.ms, init?.signal);
+        return response;
+      }
+      await waitOrAbort(delay.ms, init?.signal);
+      return this.#calendarApi(url, init);
+    }
     const form = Object.fromEntries(new URLSearchParams(String(init?.body ?? '')));
     this.requests.push({ url, form });
 
@@ -257,12 +279,17 @@ export class FakeGoogle {
     const [failure] = index === -1 ? [] : this.calendarFailures.splice(index, 1);
     if (failure === 'network') throw new TypeError('fetch failed');
     if (failure) {
+      // afterApplying: the change happens, but the answer is lost (like a timeout after Google acted).
+      if (failure.afterApplying) await this.#handleCalendarApi(url, method, body, headers);
       return Response.json(
         { error: { code: failure.status, message: 'fake', errors: [{ domain: 'global', reason: failure.reason }] } },
         { status: failure.status, headers: failure.retryAfter ? { 'Retry-After': failure.retryAfter } : {} },
       );
     }
+    return this.#handleCalendarApi(url, method, body, headers);
+  }
 
+  async #handleCalendarApi(url: string, method: string, body: unknown, headers: Headers): Promise<Response> {
     const token = this.#accessTokens.get((headers.get('Authorization') ?? '').replace(/^Bearer /, ''));
     if (!token || token.revoked) {
       return Response.json({ error: { code: 401, message: 'Invalid Credentials', errors: [{ reason: 'authError' }] } }, { status: 401 });
@@ -321,6 +348,17 @@ export class FakeGoogle {
         return Response.json({ id: event.id, status: 'confirmed' });
       }
 
+      if (method === 'PATCH' && eventsPath[2]) {
+        const event = this.events.get(decodeURIComponent(eventsPath[2]));
+        if (!event || event.calendarId !== calendarId) return Response.json({ error: { code: 404, errors: [{ reason: 'notFound' }] } }, { status: 404 });
+        if (event.deleted) return Response.json({ error: { code: 410, errors: [{ reason: 'deleted' }] } }, { status: 410 });
+        const patch = body as { start?: { dateTime: string }; end?: { dateTime: string } };
+        if (patch.start) event.start = patch.start.dateTime;
+        if (patch.end) event.end = patch.end.dateTime;
+        event.sendUpdates = searchParams.get('sendUpdates');
+        return Response.json({ id: event.id, status: 'confirmed' });
+      }
+
       if (method === 'DELETE' && eventsPath[2]) {
         const event = this.events.get(decodeURIComponent(eventsPath[2]));
         if (!event || event.calendarId !== calendarId) return Response.json({ error: { code: 404, errors: [{ reason: 'notFound' }] } }, { status: 404 });
@@ -352,4 +390,19 @@ export class FakeGoogle {
     this.signNextWithUnknownKey = false;
     return new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'fake-key-1' }).sign(key);
   }
+}
+
+// Resolves after `ms`, or rejects as fetch does when the signal aborts first.
+function waitOrAbort(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    });
+  });
 }

@@ -54,6 +54,13 @@ export interface CalendarProvider {
    */
   checkBusyAccess(connection: ConnectionRef, externalCalendarIds: readonly string[]): Promise<Map<string, BusyAccess>>;
   createEvent(connection: ConnectionRef, event: NewCalendarEvent): Promise<{ externalEventId: string }>;
+  /**
+   * The id createEvent gives the event for this idempotency key. Lets a caller clean up after a
+   * create whose outcome is unknown (it may have reached the provider before failing).
+   */
+  eventIdFor(idempotencyKey: string): string;
+  /** Moves an event to a new time; the attendees are told. Throws not_found if it's gone. */
+  moveEvent(connection: ConnectionRef, externalCalendarId: string, externalEventId: string, start: Date, end: Date): Promise<void>;
   /** Idempotent: deleting an event that's already gone succeeds. */
   deleteEvent(connection: ConnectionRef, externalCalendarId: string, externalEventId: string): Promise<void>;
 }

@@ -1,12 +1,14 @@
 import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import {
+  setBookingCalendarRequestSchema,
   updateCalendarRequestSchema,
   type Calendar,
   type CalendarResponse,
   type CalendarsResponse,
 } from '@calendar-aggregator/shared';
 import type { Db } from '../db.ts';
+import { bookingCalendarFor, retryEventRemovals } from '../bookings/bookings.ts';
 import { invalidateBusyCache } from '../calendar/busyCache.ts';
 import { CalendarProviderError } from '../calendar/provider.ts';
 import { providerFor, syncUserCalendars, type CalendarProviders } from '../calendar/syncCalendars.ts';
@@ -46,17 +48,32 @@ export function calendarsRouter({ db, requireAuth, providers }: { db: Db; requir
       orderBy: [{ connection: { createdAt: 'asc' } }, { isPrimary: 'desc' }, { name: 'asc' }],
       select: calendarFields,
     });
-    return { calendars: calendars.map(toCalendar) };
+    const bookingCalendar = await bookingCalendarFor(db, userId);
+    return { calendars: calendars.map(toCalendar), bookingCalendarId: bookingCalendar?.id ?? null };
   };
 
   router.get('/', async (req, res) => {
     res.json(await list(currentUser(req).id));
   });
 
-  // "Refresh": copies each account's calendar list again and re-checks which can be read.
+  // "Refresh": copies each account's calendar list again, re-checks which can be read, and retries
+  // removing the events of bookings cancelled while access had expired.
   router.post('/sync', async (req, res) => {
     const user = currentUser(req);
     await syncUserCalendars(db, providers, user.id);
+    await retryEventRemovals(db, providers, user.id);
+    res.json(await list(user.id));
+  });
+
+  // Where booking events are created: one of the host's own calendars that events can be created
+  // in (a subscribed or shared calendar can't take them).
+  router.put('/booking-calendar', async (req, res) => {
+    const user = currentUser(req);
+    const { calendarId } = setBookingCalendarRequestSchema.parse(req.body);
+    const calendar = await db.calendar.findFirst({ where: { id: calendarId, connection: { userId: user.id } }, select: { canCreateEvents: true } });
+    if (!calendar) throw new HttpError(404, 'Calendar not found');
+    if (!calendar.canCreateEvents) throw new HttpError(409, "Bookings can only go into a calendar you own, not one shared with you or subscribed to");
+    await db.user.update({ where: { id: user.id }, data: { bookingCalendarId: calendarId } });
     res.json(await list(user.id));
   });
 

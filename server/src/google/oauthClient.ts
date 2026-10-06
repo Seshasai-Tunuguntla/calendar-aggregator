@@ -62,14 +62,16 @@ function failure(status: number, body: unknown): GoogleOAuthError {
 }
 
 export function createGoogleOAuthClient(config: Pick<GoogleAuthConfig, 'clientId' | 'clientSecret' | 'redirectUri'>, fetchFn: typeof fetch) {
-  async function postForm(url: string, form: Record<string, string>): Promise<{ status: number; body: unknown }> {
+  // `signal` lets a caller with a deadline (a Google Calendar call refreshing its token) stop the
+  // request sooner than the 10-second default.
+  async function postForm(url: string, form: Record<string, string>, signal?: AbortSignal): Promise<{ status: number; body: unknown }> {
     let response: Response;
     try {
       response = await fetchFn(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
         body: new URLSearchParams(form),
-        signal: AbortSignal.timeout(10_000),
+        signal: signal ? AbortSignal.any([AbortSignal.timeout(10_000), signal]) : AbortSignal.timeout(10_000),
       });
     } catch {
       throw new GoogleOAuthError('network_error', 0);
@@ -113,13 +115,12 @@ export function createGoogleOAuthClient(config: Pick<GoogleAuthConfig, 'clientId
       return parsed.data;
     },
 
-    async refreshAccessToken(refreshToken: string): Promise<RefreshResponse> {
-      const { status, body } = await postForm(GOOGLE_ENDPOINTS.token, {
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-      });
+    async refreshAccessToken(refreshToken: string, signal?: AbortSignal): Promise<RefreshResponse> {
+      const { status, body } = await postForm(
+        GOOGLE_ENDPOINTS.token,
+        { grant_type: 'refresh_token', refresh_token: refreshToken, client_id: config.clientId, client_secret: config.clientSecret },
+        signal,
+      );
       if (status !== 200) throw failure(status, body);
       const parsed = refreshResponseSchema.safeParse(body);
       if (!parsed.success) throw new GoogleOAuthError('unexpected_response', status);

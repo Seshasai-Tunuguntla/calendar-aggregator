@@ -9,6 +9,7 @@ import { signValue, verifyValue } from '../auth/signedCookie.ts';
 import { CALENDAR_SCOPES, type GoogleAuthConfig } from '../google/config.ts';
 import { connectGoogleAccount, signInWithGoogle } from '../google/accounts.ts';
 import type { CalendarProvider } from '../calendar/provider.ts';
+import { retryEventRemovals } from '../bookings/bookings.ts';
 import { syncCalendars } from '../calendar/syncCalendars.ts';
 import type { IdTokenVerifier } from '../google/idToken.ts';
 import type { GoogleOAuthClient } from '../google/oauthClient.ts';
@@ -204,11 +205,22 @@ export function googleAuthRouter({
         }
       };
 
+      // 8, continued. With access working again, remove the events of bookings that were
+      // cancelled while it had expired ("cancelled, still on your calendar"). Best effort too.
+      const retryRemovals = async (userId: string) => {
+        try {
+          await retryEventRemovals(db, { GOOGLE: calendarProvider }, userId);
+        } catch (error) {
+          console.error('Retrying event removals after sign-in failed:', error instanceof Error ? error.message : error);
+        }
+      };
+
       // 7. Save, then sign in (a brand-new session token) or go back to the calendars page.
       if (flow.intent === 'signin') {
         const result = await signInWithGoogle(db, { identity, update, timeZone: flow.timeZone });
         if ('error' in result) return fail(result.error);
         await syncAccountCalendars();
+        await retryRemovals(result.userId);
         await startSession({ db, req, res, production, userId: result.userId, now: now() });
         res.redirect(303, `${config.appOrigin}/dashboard`);
         return;
@@ -220,6 +232,7 @@ export function googleAuthRouter({
       const result = await connectGoogleAccount(db, { userId: user.id, identity, update });
       if ('error' in result) return fail(result.error);
       await syncAccountCalendars();
+      await retryRemovals(user.id);
       res.redirect(303, `${config.appOrigin}/calendars?connected=1`);
     } catch (error) {
       // Google errors, a rejected ID token, or the database: the person gets a page they can act

@@ -1,4 +1,4 @@
-import type { Request, RequestHandler } from 'express';
+import type { Request, RequestHandler, Response } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import type { ApiError } from '@calendar-aggregator/shared';
 import type { Db } from '../db.ts';
@@ -19,18 +19,26 @@ export function clientKey(req: Request): string {
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
+export interface RateLimitOptions {
+  windowMs?: number;
+  /** The error shown when the limit is reached. */
+  message?: string;
+  /** Count only requests that succeed (a 4xx or 5xx gives its hit back). */
+  countSuccessesOnly?: boolean;
+  /** Requests this returns true for aren't counted or limited. */
+  skip?: (req: Request, res: Response) => boolean;
+}
+
 // `name` keeps each limiter's counts apart in the shared RateLimit table.
 export function createRateLimiter({
   db,
   name,
   limit,
   windowMs = FIFTEEN_MINUTES,
-}: {
-  db: Db;
-  name: string;
-  limit: number;
-  windowMs?: number;
-}): RequestHandler {
+  message = 'Too many requests, please try again later',
+  countSuccessesOnly = false,
+  skip,
+}: { db: Db; name: string; limit: number } & RateLimitOptions): RequestHandler {
   return rateLimit({
     windowMs,
     limit,
@@ -38,6 +46,8 @@ export function createRateLimiter({
     store: new PostgresStore({ db, prefix: `${name}:` }),
     standardHeaders: 'draft-8',
     legacyHeaders: false,
-    message: { error: 'Too many requests, please try again later' } satisfies ApiError,
+    message: { error: message } satisfies ApiError,
+    skipFailedRequests: countSuccessesOnly,
+    ...(skip ? { skip } : {}),
   });
 }

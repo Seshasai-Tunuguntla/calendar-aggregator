@@ -56,12 +56,16 @@ model User {
   isDemo   Boolean @default(false)
 
   // Scheduling settings: one set per host, used by all their event types.
-  bufferBeforeMinutes Int  @default(0)
-  bufferAfterMinutes  Int  @default(0)
-  minNoticeMinutes    Int  @default(240)
-  horizonDays         Int  @default(30)
+  bufferBeforeMinutes Int     @default(0)
+  bufferAfterMinutes  Int     @default(0)
+  minNoticeMinutes    Int     @default(240)
+  horizonDays         Int     @default(30)
   // Null: no daily limit.
   maxPerDay           Int?
+  // Where booking events are created: one of this user's own calendars (canCreateEvents). Null:
+  // the primary calendar of their first account. The app checks it belongs to the user (a
+  // calendar row has no userId to enforce that with a foreign key).
+  bookingCalendarId   String? @db.Uuid
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
@@ -70,6 +74,9 @@ model User {
   availabilityRules AvailabilityRule[]
   eventTypes        EventType[]
   busyCache         BusyCache[]
+  bookingCalendar   Calendar?            @relation("BookingCalendar", fields: [bookingCalendarId], references: [id], onDelete: SetNull)
+
+  @@index([bookingCalendarId])
 }
 
 // A signed-in browser. The cookie holds a random token; only its SHA-256 hash is stored, so a
@@ -132,9 +139,10 @@ model Calendar {
   canCreateEvents    Boolean    @default(false)
   busyAccess         BusyAccess @default(UNKNOWN)
 
-  connection     CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  demoBusyEvents DemoBusyEvent[]
-  bookings       Booking[]
+  connection        CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  demoBusyEvents    DemoBusyEvent[]
+  bookings          Booking[]
+  bookingCalendarOf User[]             @relation("BookingCalendar")
 
   @@unique([connectionId, externalCalendarId])
 }
@@ -200,6 +208,10 @@ model Booking {
   manageTokenHash String        @unique
   createdAt       DateTime      @default(now()) @db.Timestamptz(3)
   cancelledAt     DateTime?     @db.Timestamptz(3)
+  // Cancelled, but the event couldn't be removed from the host's calendar (their Google access had
+  // expired): "cancelled, still on your calendar". Removing it is retried when they reconnect or
+  // refresh their calendars. Only ever true for a cancelled booking (hand-written CHECK).
+  stillOnCalendar Boolean       @default(false)
 
   // Restrict: an event type with bookings can't be deleted (it's deactivated instead), so
   // bookings are never lost by accident.

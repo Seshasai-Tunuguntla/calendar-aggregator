@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Options } from 'express-rate-limit';
 import { createApp } from '../../src/app.ts';
 import { PostgresStore } from '../../src/middleware/rateLimitStore.ts';
+import { TestBrowser } from '../helpers/browser.ts';
 import { useTestDatabase } from '../helpers/db.ts';
+import { FakeGoogle, TEST_GOOGLE_CONFIG } from '../helpers/fakeGoogle.ts';
+import { signInWithGoogle } from '../helpers/googleSignIn.ts';
 import { fromOurPage } from '../helpers/http.ts';
 
 const db = useTestDatabase();
@@ -117,4 +120,72 @@ describe('the public booking pages limiter', () => {
     // Another client is unaffected.
     expect((await page('nobody/call', '198.51.100.4')).status).toBe(404);
   }, 120_000);
+});
+
+describe('the booking changes limiter', () => {
+  const app = createApp({ db, production: false, rateLimits: true });
+  const post = (path: string) => fromOurPage(request(app).post(`/api/public/${path}`)).set('X-Forwarded-For', '203.0.113.9').send({});
+
+  it('allows 10 bookings, cancellations or reschedules per client per 15 minutes, on top of the public limit', async () => {
+    for (let i = 0; i < 5; i++) {
+      expect((await post('book/nobody/call/bookings')).status).toBe(404);
+      expect((await post(`bookings/${'A'.repeat(43)}/cancel`)).status).toBe(404);
+    }
+    expect((await post('book/nobody/call/bookings')).status).toBe(429);
+    expect((await post(`bookings/${'A'.repeat(43)}/reschedule`)).status).toBe(429);
+    // Looking is still allowed: only the public limit applies to it.
+    expect((await request(app).get('/api/public/book/nobody/call').set('X-Forwarded-For', '203.0.113.9')).status).toBe(404);
+  }, 60_000);
+});
+
+describe('the daily limit on making bookings', () => {
+  // Monday 12 October 2026, 08:00 in India; the host takes 30-minute bookings all day.
+  const NOW = new Date('2026-10-12T02:30:00Z');
+  const HOST = { sub: '9200000000000000001', email: 'dana@gmail.com', name: 'Dana Host' };
+  const slot = (i: number) => new Date(NOW.getTime() + (i + 1) * 30 * 60_000).toISOString();
+  const MINUTE = 60_000;
+
+  it("allows 10 successful bookings with real hosts per client per day; failures and demo bookings don't count", async () => {
+    const google = await FakeGoogle.create();
+    google.setCalendars(HOST.sub, [{ id: HOST.email, summary: HOST.email, accessRole: 'owner', primary: true }]);
+    const app = createApp({ db, production: false, rateLimits: true, now: () => NOW, google: { config: TEST_GOOGLE_CONFIG, fetch: google.fetch, jwks: google.jwks } });
+    const host = new TestBrowser(app);
+    await signInWithGoogle(host, google, HOST);
+    await host.put('/api/availability', {
+      timeZone: 'Asia/Kolkata',
+      rules: [{ weekday: 1, startMinute: 0, endMinute: 1440 }],
+      settings: { bufferBeforeMinutes: 0, bufferAfterMinutes: 0, minNoticeMinutes: 0, horizonDays: 30, maxPerDay: null },
+    });
+    await host.post('/api/event-types', { slug: 'call', title: 'Call', durationMinutes: 30, slotStepMinutes: 30 });
+
+    const start = Date.now();
+    at(start);
+    const book = (path: string, when: string) =>
+      fromOurPage(request(app).post(`/api/public/book/${path}/bookings`))
+        .set('X-Forwarded-For', '203.0.113.20')
+        .send({ start: when, guestName: 'Guest', guestEmail: 'guest@example.com', guestTimeZone: 'UTC' });
+
+    for (let i = 0; i < 9; i++) expect((await book('dana-host/call', slot(i))).status).toBe(201);
+    // A failed attempt (the slot is taken) gives its daily count back.
+    expect((await book('dana-host/call', slot(0))).status).toBe(409);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Past the 15-minute limit's window (10 used), but still the same day.
+    at(start + 16 * MINUTE);
+    expect((await book('dana-host/call', slot(9))).status).toBe(201);
+    const blocked = await book('dana-host/call', slot(10));
+    expect(blocked.status).toBe(429);
+    expect(blocked.body).toEqual({ error: "You've made as many bookings as one connection can make in a day. Please try again tomorrow." });
+    // Counted in Postgres, shared by every server instance.
+    expect((await db.rateLimit.findUnique({ where: { key: 'booking-daily:203.0.113.20' } }))?.hits).toBeGreaterThanOrEqual(10);
+
+    // The demo sends no invitations, so the daily limit doesn't apply to it.
+    await fromOurPage(request(app).post('/api/auth/demo'));
+    const demoSlots = await request(app).get('/api/public/book/priya/30-min-call/slots?from=2026-10-13&to=2026-10-14&tz=Asia/Kolkata');
+    expect((await book('priya/30-min-call', demoSlots.body.slots[0].start)).status).toBe(201);
+
+    // A day later, the client can book again.
+    at(start + 24 * 60 * MINUTE + 1);
+    expect((await book('dana-host/call', slot(10))).status).toBe(201);
+  }, 60_000);
 });

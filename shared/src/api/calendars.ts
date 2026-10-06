@@ -26,8 +26,10 @@ export const calendarSchema = z.object({
 });
 export type Calendar = z.infer<typeof calendarSchema>;
 
-// GET /api/calendars and POST /api/calendars/sync
-export const calendarsResponseSchema = z.object({ calendars: z.array(calendarSchema) });
+// GET /api/calendars and POST /api/calendars/sync. bookingCalendarId: where booking events are
+// created (the host's choice, or else the primary calendar of their first account); null if they
+// own no calendar events can be created in.
+export const calendarsResponseSchema = z.object({ calendars: z.array(calendarSchema), bookingCalendarId: z.uuid().nullable() });
 export type CalendarsResponse = z.infer<typeof calendarsResponseSchema>;
 
 // PATCH /api/calendars/:id
@@ -35,3 +37,7 @@ export const updateCalendarRequestSchema = z.object({ countsAsBusy: z.boolean() 
 export type UpdateCalendarRequest = z.infer<typeof updateCalendarRequestSchema>;
 export const calendarResponseSchema = z.object({ calendar: calendarSchema });
 export type CalendarResponse = z.infer<typeof calendarResponseSchema>;
+
+// PUT /api/calendars/booking-calendar
+export const setBookingCalendarRequestSchema = z.object({ calendarId: z.uuid('Calendar not found') });
+export type SetBookingCalendarRequest = z.infer<typeof setBookingCalendarRequestSchema>;
