@@ -13,6 +13,7 @@ coverage/
 playwright-report/
 test-results/
 .claude/launch.json
+.claude/scheduled_tasks.lock
 
 # Design mockups are throwaway (docs/design keeps screenshots of them).
 docs/design/mockups/
