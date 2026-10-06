@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Prisma } from '@prisma/client';
+import { DEMO_HANDLE } from '@calendar-aggregator/shared';
 import type { Db } from '../db.ts';
 import type { GoogleIdentity } from './idToken.ts';
 
@@ -31,13 +32,16 @@ export async function signInWithGoogle(
   }
 
   const base = handleBase(identity.name, identity.email);
+  // The demo's handle is never given to a real person, even before the demo exists: "Try booking"
+  // links to it, and demo bookings are exempt from the daily booking limit.
+  const reserved = base === DEMO_HANDLE;
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       const user = await db.user.create({
         data: {
           name: (identity.name ?? identity.email.split('@')[0] ?? 'Host').slice(0, 100),
           email: identity.email,
-          handle: attempt === 0 ? base : `${base}-${randomSuffix()}`,
+          handle: attempt === 0 && !reserved ? base : `${base}-${randomSuffix()}`,
           timeZone,
           connections: { create: { provider: 'GOOGLE', externalAccountId: identity.sub, ...data } },
         },

@@ -18,7 +18,7 @@ import { availableSlots } from '../calendar/availableSlots.ts';
 import type { Timeouts } from '../bookings/timeouts.ts';
 import { CalendarProviderError } from '../calendar/provider.ts';
 import { DEMO_HOST } from '../demo/demoData.ts';
-import { ensureDemoHost } from '../demo/ensureDemoHost.ts';
+import { ensureDemoExists } from '../demo/resetDemo.ts';
 import type { CalendarProviders } from '../calendar/syncCalendars.ts';
 import { HttpError } from '../utils/httpError.ts';
 
@@ -80,9 +80,9 @@ export function publicBookingRouter({
   // all get the same 404.
   const findEventType = async (params: unknown) => {
     const parsed = pathSchema.safeParse(params);
-    // "Try booking" must work before anyone has used "Try as host": create the demo host on first
-    // visit. (Phase 10 turns this into the periodic, locked reset.)
-    if (parsed.success && parsed.data.handle === DEMO_HOST.handle) await ensureDemoHost(db, now());
+    // "Try booking" must work before anyone has used "Try as host": build the demo if it doesn't
+    // exist. (Resets happen on cold starts and demo logins, never under a guest's feet.)
+    if (parsed.success && parsed.data.handle === DEMO_HOST.handle) await ensureDemoExists(db, now());
     const eventType = parsed.success
       ? await db.eventType.findFirst({
           where: { slug: parsed.data.slug, active: true, user: { handle: parsed.data.handle } },

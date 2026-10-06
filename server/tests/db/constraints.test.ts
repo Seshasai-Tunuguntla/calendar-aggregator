@@ -24,6 +24,7 @@ const HAND_WRITTEN_CONSTRAINTS: Record<string, string> = {
     'CHECK (((("durationMinutes" >= 5) AND ("durationMinutes" <= 720)) AND (("slotStepMinutes" >= 5) AND ("slotStepMinutes" <= 240))))',
   EventType_slug_check: `CHECK ((slug ~ '^[a-z0-9][a-z0-9-]{0,58}[a-z0-9]$'::text))`,
   DemoBusyEvent_ends_after_start_check: 'CHECK (("endsAt" > "startsAt"))',
+  DemoState_single_row_check: 'CHECK ((id = 1))',
 };
 
 // The Postgres error a raw statement fails with, so tests can name the constraint that fired.
@@ -210,5 +211,12 @@ describe('User and EventType constraints', () => {
     expect(await violation(create({ durationMinutes: 4 }))).toContain('EventType_minutes_check');
     expect(await violation(create({ slotStepMinutes: 0 }))).toContain('EventType_minutes_check');
     expect(await violation(create({ slug: 'Call Me' }))).toContain('EventType_slug_check');
+  });
+});
+
+describe('DemoState_single_row_check', () => {
+  it('keeps one demo reset time for every server instance: a second row is rejected', async () => {
+    await db.demoState.create({ data: { id: 1, lastResetAt: new Date() } });
+    expect(await violation(db.demoState.create({ data: { id: 2, lastResetAt: new Date() } }))).toContain('DemoState_single_row_check');
   });
 });

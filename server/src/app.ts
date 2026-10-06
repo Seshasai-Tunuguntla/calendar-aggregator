@@ -15,6 +15,7 @@ import { TIMEOUTS, type Timeouts } from './bookings/timeouts.ts';
 import { requireAuth } from './middleware/auth.ts';
 import { errorHandler, notFound } from './middleware/errorHandler.ts';
 import { DEMO_HOST } from './demo/demoData.ts';
+import { resetDemoIfStale } from './demo/resetDemo.ts';
 import { TRUST_PROXY_HOPS, createRateLimiter, type RateLimitOptions } from './middleware/rateLimit.ts';
 import { requireSameOrigin } from './middleware/sameOrigin.ts';
 import { accountRouter } from './routes/account.ts';
@@ -45,6 +46,11 @@ export interface AppDeps {
   beforeBookingLock?: () => Promise<void>;
   /** The time limits of booking changes and Google calls (bookings/timeouts.ts); tests shorten them. */
   timeouts?: Timeouts;
+  /**
+   * Rebuild the demo on a cold start if it's 30+ minutes old (demo/resetDemo.ts): the server and
+   * the Vercel function turn it on; tests leave it off unless they're testing it.
+   */
+  resetDemoOnColdStart?: boolean;
 }
 
 const passThrough: RequestHandler = (_req, _res, next) => next();
@@ -61,6 +67,7 @@ export function createApp({
   google = null,
   beforeBookingLock,
   timeouts = TIMEOUTS,
+  resetDemoOnColdStart = false,
 }: AppDeps) {
   const app = express();
 
@@ -85,6 +92,19 @@ export function createApp({
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok' } satisfies HealthResponse);
   });
+
+  // A cold start (a new server instance) checks the demo once; the first requests wait for that,
+  // so nobody sees it half rebuilt. A failure is logged and doesn't take the API down with it.
+  if (resetDemoOnColdStart) {
+    let coldStart: Promise<void> | undefined;
+    app.use('/api', (_req, _res, next) => {
+      coldStart ??= resetDemoIfStale(db, now()).then(
+        () => undefined,
+        (error: unknown) => console.error('Demo reset on cold start failed:', error instanceof Error ? error.message : error),
+      );
+      void coldStart.then(() => next());
+    });
+  }
 
   const googleDeps = google ? createGoogleDeps(db, google, now, timeouts) : null;
   const googleRevoker = googleDeps && { oauth: googleDeps.oauth, keyring: googleDeps.config.keyring };

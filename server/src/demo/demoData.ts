@@ -4,7 +4,7 @@ import type { Interval } from '@calendar-aggregator/shared/slots';
 
 // The public demo's host, "Priya", as pure data: stable ids (so links and tests never change),
 // and busy events built relative to a given day, so the demo never shows an empty or past week.
-// Phase 10 adds the self-resetting machinery that rebuilds this data.
+// resetDemo.ts rebuilds the demo from this data.
 
 export const DEMO_TIME_ZONE = 'Asia/Kolkata';
 

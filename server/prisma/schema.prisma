@@ -256,6 +256,13 @@ model BusyCache {
   @@index([fetchedAt])
 }
 
+// When the public demo was last rebuilt (src/demo/resetDemo.ts): one row, id 1 (a hand-written
+// CHECK). In the database, not memory, so every server instance agrees on when the next reset is due.
+model DemoState {
+  id          Int      @id @default(1)
+  lastResetAt DateTime @db.Timestamptz(3)
+}
+
 // Hit counts for the rate limiters, shared by every server instance (from the Study Scheduler).
 model RateLimit {
   key       String @id

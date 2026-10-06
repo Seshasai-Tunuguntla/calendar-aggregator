@@ -179,10 +179,15 @@ describe('the daily limit on making bookings', () => {
     // Counted in Postgres, shared by every server instance.
     expect((await db.rateLimit.findUnique({ where: { key: 'booking-daily:203.0.113.20' } }))?.hits).toBeGreaterThanOrEqual(10);
 
-    // The demo sends no invitations, so the daily limit doesn't apply to it.
+    // The demo sends no invitations, so the daily limit doesn't apply to it, and its bookings
+    // don't use up any of the client's allowance for real hosts.
     await fromOurPage(request(app).post('/api/auth/demo'));
+    const dailyHits = async () => (await db.rateLimit.findUnique({ where: { key: 'booking-daily:203.0.113.20' } }))?.hits;
+    const before = await dailyHits();
     const demoSlots = await request(app).get('/api/public/book/priya/30-min-call/slots?from=2026-10-13&to=2026-10-14&tz=Asia/Kolkata');
     expect((await book('priya/30-min-call', demoSlots.body.slots[0].start)).status).toBe(201);
+    expect((await book('priya/30-min-call', demoSlots.body.slots[2].start)).status).toBe(201);
+    expect(await dailyHits()).toBe(before);
 
     // A day later, the client can book again.
     at(start + 24 * 60 * MINUTE + 1);

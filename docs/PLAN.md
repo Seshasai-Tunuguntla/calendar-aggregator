@@ -275,8 +275,8 @@ goal; trade-off vs short caching to be explained).
 | 6 | Availability rules, settings, event types, slots endpoint; "Delete my account" backend | Done |
 | 7 | Public booking: double-booking protection, Google event creation, manage token, cancel, reschedule, concurrency tests | Done |
 | 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | Done |
-| 9 | Public booking frontend (guest flow end to end) | Done (awaiting review) |
-| 10 | Self-resetting demo + tests | |
+| 9 | Public booking frontend (guest flow end to end) | Done |
+| 10 | Self-resetting demo + tests | Done |
 | 11 | README for recruiters (diagrams, decisions, trade-offs, screenshots), Playwright smoke test | |
 | 12 | Deploy to Vercel + Neon (previews never touch production DB), production redirect URIs, live link, real-phone test | |
 
@@ -646,6 +646,24 @@ Loading, ready, time zone changes, form errors, a real "just taken" (a second gu
 ### Tests
 
 Client: 43 new, 110 in all. The component tests are the first in any of the three projects: slot selection (`SlotPicker`, `DayPicker`: pressed state, keyboard, paging, loading more), booking-form validation (required fields, a bad email, focus, tidied values, failures shown), and the time helpers. Page tests run the real routes against a mocked API: the booking page (zone detection and change, only days with times, booking and the confirmation, "just taken", other failures, empty, error with retry, loading, not found, demo wording) and the manage page (private-page meta tags, zones, cancel, reschedule, its conflict, demo wording, started, invalid link, loading, error); the header tests; and "Try booking". Server: 4 new (the "just taken" message, the API's headers, the demo booking page on a fresh database, the shared demo constants); one case moved from "isn't available" to "just taken".
+
+## Phase 10 decisions (self-resetting demo)
+
+`server/src/demo/resetDemo.ts`, the Study Scheduler's pattern:
+
+- **When:** on a cold start (the first requests of a new server instance wait for it, so nobody sees a half-built demo; a failure is logged and the API carries on) and on "Try as host", and only if the last rebuild is **30 or more minutes** old. The time is in the database, a one-row **`DemoState`** table (a hand-written `CHECK (id = 1)`, in the constraints test), so every serverless instance agrees on when the next one is due. Most calls find it fresh with two primary-key reads and take no lock.
+- **One rebuild at a time:** a transaction-scoped advisory lock. Whoever gets it checks again: of several requests that found the demo due at the same moment, the first rebuilds and the rest find it fresh and do nothing (tested: two at once give one rebuild).
+- **Never in the middle of a booking change:** the rebuild also takes the demo host's booking lock, the one booking, moving and cancelling hold, so it waits for any change in progress (tested by holding that lock: the rebuild waits until it's released).
+- **Everything a visitor can change is put back:** the host's settings and time zone, the booking calendar, which calendars count as busy, the weekly hours, the event types (added, edited, turned off or deleted), all bookings (made by guests or cancelled by the host) and their calendar events, and the busy cache. The test changes every one of these through the API, checks a demo login 29 minutes later changes nothing, and that one at 30 minutes restores a snapshot equal to the fresh demo.
+- **Stable ids:** the host, the connection, the three calendars and the three event types keep their ids, so links and the "Try booking" page never change (tested). The host row is updated, not deleted, so visitors stay signed in through a rebuild and simply see the fresh demo. A guest's manage link from before a rebuild stops working ("This link doesn't work"); acceptable for a demo, and the dashboard already says it resets.
+- **Busy events** are regenerated around the day of the rebuild: from the day before through the end of the 30-day booking horizon, plus a day for guests in zones ahead of Priya's (it was three weeks in phase 3, which left the last nine bookable days empty). Deterministic per date, as before.
+- **"Try booking" never resets:** the booking page only builds the demo if it doesn't exist (a fresh database), so a guest never has the demo rebuilt under them. A missing demo host counts as never built, whatever `DemoState` says.
+- **Demo bookings never contact Google:** they go through the demo provider, which writes demo events in Postgres. Tested with a fake Google configured: booking, moving, cancelling and the host's cancel make no request to it at all. They don't count toward the daily booking limit (the existing test now also checks the client's count is unchanged). Demo accounts still can't connect a Google account (phase 4 test).
+- **Found while doing this:** the demo's handle `priya` wasn't reserved. On a fresh production database, a real person named Priya signing in first would have got it, making "Try booking" open their page and the demo impossible to build. Real accounts now never get the demo's handle (they get `priya-xxxxx`; tested).
+
+**Mutation checks:** 14 deliberate bugs, one at a time. 13 were caught: no re-check under the lock, no reset lock, no booking lock, `>` for `>=` at 30 minutes, settings not restored, bookings kept, busy cache kept, busy events only three weeks, "Try booking" resetting a stale demo, a missing host not noticed, the cold-start check on every request, the cold start not awaited, and the handle not reserved. The 14th (not clearing the booking calendar) was an equivalent mutant, since deleting the calendars already clears it (`ON DELETE SET NULL`), so that line was removed.
+
+Checked live on the dev servers: the restarted API rebuilt the never-reset demo on its first request; an event type turned off in the browser stayed off until `DemoState` was made 31 minutes old, then came back on the next "Try as host".
 
 ## Notes for later phases
 

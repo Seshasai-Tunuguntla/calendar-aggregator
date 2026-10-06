@@ -14,7 +14,7 @@ const port = Number(process.env['PORT'] ?? 4200);
 const db = createDb(process.env['DATABASE_URL'] ?? '');
 const googleConfig = googleAuthConfigFromEnv();
 
-createApp({ db, google: googleConfig ? { config: googleConfig } : null }).listen(port, () => {
+createApp({ db, google: googleConfig ? { config: googleConfig } : null, resetDemoOnColdStart: true }).listen(port, () => {
   console.info(`API listening on http://localhost:${port}`);
   if (!googleConfig) console.info('Google sign-in is off: see docs/google-setup.md. The demo works without it.');
 });

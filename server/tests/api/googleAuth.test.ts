@@ -191,6 +191,11 @@ describe('GET /api/auth/google/callback: signing in', () => {
     expect(handles[1]).toMatch(/^sesha-sai-tunuguntla-[a-z0-9]{5}$/);
   });
 
+  it("never gives a real person the demo's handle, even before the demo exists", async () => {
+    await signIn({ sub: '1000000000000000098', email: 'priya@gmail.com', name: 'Priya' });
+    expect((await browser.get('/api/auth/me')).body.user.handle).toMatch(/^priya-[a-z0-9]{5}$/);
+  });
+
   it('refuses a new Google account whose email already belongs to another user', async () => {
     await createUser(db, { email: 'sesha.sai@gmail.com' });
     const res = await signIn(SESHA);

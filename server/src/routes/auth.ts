@@ -2,7 +2,7 @@ import { Router, type RequestHandler } from 'express';
 import type { MeResponse } from '@calendar-aggregator/shared';
 import type { Db } from '../db.ts';
 import { DEMO_IDS } from '../demo/demoData.ts';
-import { ensureDemoHost } from '../demo/ensureDemoHost.ts';
+import { resetDemoIfStale } from '../demo/resetDemo.ts';
 import { deleteSession, sessionCookie, sessionToken, sessionUserFields, startSession } from '../auth/sessions.ts';
 import { currentUser, requireAuth } from '../middleware/auth.ts';
 
@@ -20,9 +20,10 @@ export function authRouter({
   const router = Router();
   const cookie = sessionCookie(production);
 
-  // "Try as host": signs the visitor in as the demo host, creating them on first use.
+  // "Try as host": signs the visitor in as the demo host, first rebuilding the demo if it's 30+
+  // minutes old (or doesn't exist yet), so each visitor starts from a fresh, unchanged demo.
   router.post('/demo', demoLoginLimiter, async (req, res) => {
-    await ensureDemoHost(db, now());
+    await resetDemoIfStale(db, now());
     await startSession({ db, req, res, production, userId: DEMO_IDS.host, now: now() });
     const user = await db.user.findUniqueOrThrow({ where: { id: DEMO_IDS.host }, select: sessionUserFields });
     res.json({ user } satisfies MeResponse);
