@@ -678,7 +678,7 @@ Checked live on the dev servers: the restarted API rebuilt the never-reset demo 
 
 ### Screenshots and README
 
-- `docs/screenshots/` are taken from the real app by Playwright (`npm run screenshots`, a separate config that reuses the test's servers; each shot waits for its page's content so it never catches a spinner).
+- `docs/screenshots/` are taken from the real app by Playwright (`npm run screenshots`, a separate config that reuses the test's servers; each shot waits for its page's content so it never catches a spinner). Retaken on the live site in phase 12 (`LIVE_URL=<site> npm run screenshots`), so the booking links show its real address.
 - The README is written for recruiters: the demo story, features, Mermaid diagrams of the architecture, the Google sign-in sequence and the booking flow (checked to render with Mermaid 11), the slot algorithm with its worked example, the CalendarProvider interface and why it exists, privacy and security, design decisions, known trade-offs (plus "demo bookings don't survive a demo reset"), the testing approach, running locally, and the hook. The live link is a placeholder until phase 12.
 
 ## Phase 12 decisions (deployment)
