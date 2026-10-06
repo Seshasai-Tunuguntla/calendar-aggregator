@@ -1,4 +1,5 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
+import { Prisma } from '@prisma/client';
 import { ZodError } from 'zod';
 import type { ApiError } from '@calendar-aggregator/shared';
 
@@ -19,7 +20,7 @@ function asErrorWithStatus(err: unknown): ErrorWithStatus {
 }
 
 // Express 5 forwards rejected promises from async handlers here automatically,
-// so handlers can let Zod throw (or throw an HttpError) without try/catch.
+// so handlers can let Zod/Prisma throw (or throw an HttpError) without try/catch.
 export const errorHandler: ErrorRequestHandler = (err: unknown, _req, res, next) => {
   if (res.headersSent) {
     next(err);
@@ -30,6 +31,19 @@ export const errorHandler: ErrorRequestHandler = (err: unknown, _req, res, next)
     const body: ApiError = { error: err.issues[0]?.message ?? 'Invalid request', details: err.issues };
     res.status(400).json(body);
     return;
+  }
+
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === 'P2002') {
+      // meta.target is usually an array of field names, but can be a constraint name string.
+      const fields = ([] as unknown[]).concat(err.meta?.['target'] ?? []).join(', ');
+      res.status(409).json({ error: `${fields || 'Value'} already in use` } satisfies ApiError);
+      return;
+    }
+    if (err.code === 'P2025') {
+      res.status(404).json({ error: 'Record not found' } satisfies ApiError);
+      return;
+    }
   }
 
   const e = asErrorWithStatus(err);

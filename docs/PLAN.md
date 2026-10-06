@@ -149,7 +149,7 @@ step 4 gives 09:00, 10:30, 11:00, 12:00 and 12:30. The 4-hour minimum notice the
 3. If Google event creation fails after the booking is saved, roll back or mark the booking clearly (approach explained in phase 7).
 4. Concurrency test: two simultaneous bookings of the same slot; exactly one succeeds, the other gets **409 "That time was just taken"**.
 
-## Data model (Prisma, draft; refined and explained in phase 3)
+## Data model (Prisma, draft; see "Phase 3 decisions" for the refined model)
 
 - **User:** id, name, email (unique), handle (unique, for booking URLs), timeZone, isDemo, createdAt
 - **CalendarConnection:** id, userId, provider (GOOGLE | DEMO), googleAccountEmail, encryptedRefreshToken, keyVersion, accessTokenExpiresAt, status (ACTIVE | NEEDS_RECONNECT), createdAt
@@ -247,7 +247,7 @@ goal; trade-off vs short caching to be explained).
 |---|---|---|
 | 1 | Scaffold the TypeScript monorepo (client, server, shared), strict mode, lint, Vitest, CI with typecheck; this plan | Done |
 | 2 | Slot algorithm as pure functions, all required tests + reference implementation (approach explained first) | Done |
-| 3 | Prisma schema + migrations (incl. exclusion constraint), CalendarProvider interface, DemoCalendarProvider, demo host login, session cookies | |
+| 3 | Prisma schema + migrations (incl. exclusion constraint), CalendarProvider interface, DemoCalendarProvider, demo host login, session cookies | Done |
 | 4 | Google OAuth: setup instructions, start/callback, PKCE, state, ID token verification, encrypted refresh tokens, refresh handling, disconnect; Google mocked in tests | |
 | 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | |
 | 6 | Availability rules, settings, event types, slots endpoint | |
@@ -295,12 +295,73 @@ goal; trade-off vs short caching to be explained).
 - **Rules crossing midnight are rejected, not split.** 22:00-02:00 gets "A rule can't cross midnight: add one ending at 24:00 and another starting at 00:00 the next day". Why reject: with per-rule grids, an automatic split would silently restart the grid at 00:00 and store something other than what the host entered; rejecting keeps stored = applied, keeps each rule a single weekday with start < end (simple CHECK constraint in phase 3), and loses nothing, since a slot still runs across midnight between two touching rules (tested). The phase 8 editor can offer an overnight shortcut that creates the two rules visibly.
 - **DST gap and repeat: `RULE_TIME_DISAMBIGUATION = 'compatible'`, passed explicitly.** It's RFC 5545's rule (the iCalendar standard calendar apps follow): a skipped time uses the offset from before the gap (02:30 on 8 Mar 2026 in New York is 03:30 EDT, 07:30Z), a repeated time is its first occurrence (01:30 on 1 Nov 2026 is 01:30 EDT, 05:30Z). Using the same rule as the host's calendar keeps a working-hours boundary and an event at the same wall time on the same instant. `PlainDate.toZonedDateTime` takes no disambiguation option, so conversion goes through `PlainDateTime`. Tests pin each case; mutation checks with `'earlier'`, `'later'` and `'reject'` all fail them.
 
+## Phase 3 decisions (data layer, provider interface, demo login, sessions)
+
+### Prisma version: 6.19.3 (tested, not assumed)
+
+The rule: the newest version whose client runs cleanly under Node type stripping with no build step, locally and on a Vercel function; if 7 needs a build step or workarounds, stay on 6.
+
+- **Prisma 8** is only a release candidate (`8.0.0-rc.20`, although npm's `latest` tag points at it), so not considered.
+- **Prisma 7.10** (newest stable) passed the runtime test. Its TypeScript generator reads `tsconfig.json` and, because `allowImportingTsExtensions` is on, writes `.ts` import paths; the generated code has no enums, namespaces or parameter properties. `node src/main.ts` worked locally with no build step, `tsc` passed with this repo's strict settings, and a throwaway Vercel deployment (Node 24.21, `process.features.typescript = "strip"`) loaded the client, the pg driver adapter and the query compiler, failing only at the deliberately unreachable database (P1001).
+- **But Prisma 7 needs a workaround to store times correctly.** Its pg adapter writes a `DateTime` as the UTC clock reading *without an offset* (`formatDateTime` in `@prisma/adapter-pg`), so Postgres reads it in the session's time zone, and on reading it relabels whatever comes back as `+00:00`. With a non-UTC session (the author's local Postgres runs in Asia/Kolkata), `09:00Z` was stored as `03:30Z`, while Prisma's own round trip still showed `09:00Z`, so the bug hides itself. Raw SQL, `now()` comparisons and the exclusion constraint across a DST change would all be affected, and local behaviour would differ from Neon (UTC). The fix would be forcing every session to UTC (a database setting plus a startup check): a workaround, so by the rule we stay on 6.
+- **Prisma 6.19.3** passed everything with no workaround: it stored `09:00Z` as `09:00Z` in an Asia/Kolkata session, `import { PrismaClient } from '@prisma/client'` works from ESM under type stripping (the client is generated JavaScript), and a throwaway Vercel deployment loaded the query engine and failed only at the unreachable database, without the `includeFiles` setting the Study Scheduler needed. Both versions generated byte-identical SQL for this schema.
+- **Throwaway Vercel projects** `prisma7` and `prisma6` (preview deployments, unreachable database, deployment protection on) were left in the author's Vercel account for review; they can be deleted from the dashboard.
+- **`npm audit`** reports `deepmerge-ts` (high: stack exhaustion merging recursive objects) inside the Prisma CLI's config loader. It only ever merges our own config at build time and is never bundled into the function, so it's not reachable by a visitor. npm's suggested fix (downgrade to 6.19.3) was checked and doesn't help: 6.19.3 ships the same version. `prisma` is a devDependency (build-time tooling); Prisma 7 additionally pulled in `mysql2` (two high advisories), which 6 doesn't.
+- **Seen on the way, for phase 7:** with Prisma 6, the exclusion violation arrives as `PrismaClientUnknownRequestError` whose message contains `23P01` and the constraint name (Prisma 7 had a structured `P2039`). Phase 7 will either recognise it with a small tested helper or insert with `ON CONFLICT DO NOTHING`, which works with exclusion constraints and avoids parsing errors.
+
+### Data model (refinements to the draft)
+
+- **UUIDv7 ids** (`@default(uuid(7)) @db.Uuid`): not guessable or countable like autoincrement ids, and time-ordered so indexes stay compact. The demo uses fixed UUIDs so its links never change.
+- **Every timestamp is `timestamptz`.** Prisma's default `timestamp` has no zone, and the exclusion constraint builds `tstzrange` values, which would then depend on the session's zone setting. A test inserts in an Asia/Kolkata session inside one transaction and checks the overlap is still caught.
+- **Scheduling settings live on User** (buffers, notice, horizon, max per day): one set per host, always present, with database defaults. A separate table would add a join and a "missing row" case for no benefit.
+- **`Booking.hostId` is stored even though the event type knows its owner**, because an exclusion constraint can only compare columns of its own table. A composite foreign key `(eventTypeId, hostId) -> EventType(id, userId)` guarantees the copy is always right.
+- **Bookings restrict event type deletion** (`ON DELETE RESTRICT`): an event type with bookings is deactivated, never deleted, so bookings can't vanish by accident.
+- **Sign-in identity comes from connections**, not a column on User: `CalendarConnection(provider, externalAccountId)` is unique, where `externalAccountId` is Google's stable `sub` (emails can change). Signing in with any of a user's connected Google accounts finds the same user, and one Google account can't belong to two users. `grantedScopes` records what the user actually ticked on Google's consent screen.
+- **`SelectedCalendar` became `Calendar`** (it lists every calendar of a connection, with `countsAsBusy`), and **`DemoBusyEvent` belongs to a calendar**, not a user, so "which calendars count as busy" works in the demo too.
+- **`Session` table** (new): see Sessions below.
+- **Deferred:** which calendar new bookings go into, and the booking's Google sync fields, arrive with phases 6-7 in their own migrations.
+
+### Hand-written constraints, and the check that keeps them
+
+Added by hand at the end of the init migration: the bookings' exclusion constraint (`btree_gist`, `tstzrange(..., '[)')`, only `CONFIRMED`), an exclusion constraint so a host's rules on one weekday can't overlap (`int4range`, the database twin of the phase 2 Zod rule), and CHECKs for rule minutes and weekday, settings ranges, booking times, `cancelledAt` matching the status, handle and slug format, and lowercase emails.
+
+- **Prisma ignores them when diffing:** a probe `migrate dev --create-only` right after produced an empty migration. That's today; a future schema change or hand edit could still drop or weaken one.
+- **`tests/db/constraints.test.ts`** runs after every migration and compares the full list of CHECK and EXCLUDE constraints with their exact `pg_get_constraintdef` text, so dropping, renaming or weakening any of them fails. Behaviour tests back it up (overlap rejected, touching allowed, cancelled ignored, other hosts independent, wrong host rejected by the composite key).
+- **Proven:** a fake later migration that recreated the booking constraint without its `WHERE` failed 3 tests; one that dropped it failed 4.
+- **`tests/db/migrations.test.ts`** runs `prisma migrate diff` from the migrated test database to `schema.prisma` and expects an empty diff, so a model change without a migration fails CI.
+
+### CalendarProvider interface
+
+`server/src/calendar/provider.ts`: `listCalendars`, `getBusyIntervals`, `createEvent`, `deleteEvent`. Refinements: `deleteEvent` also takes the calendar id (Google's API needs it), busy time is returned as UTC epoch-ms intervals so it goes straight into `computeSlots`, `deleteEvent` is idempotent (Google answers 410 for an already deleted event), and failures are a `CalendarProviderError` with a `kind` the app can act on (`auth` -> needs reconnect, `rate_limited`, `not_found`, `unavailable`). **DemoCalendarProvider** reads and writes `DemoBusyEvent` rows, keeping only start and end (like what we read from Google); creating an event makes that time busy, as Google would.
+
+### Sessions and CSRF
+
+- **Server-side sessions:** the cookie holds 32 random bytes; the `Session` table stores only their SHA-256, so a database leak contains no working sessions (a plain hash suffices because the token is random, not a password). Logout deletes the row, so a copied cookie stops working at once, which a signed JWT can't do. 14-day expiry; an expired session is deleted when seen. A demo login replaces any session the browser already had.
+- **Cookie:** `httpOnly` (scripts can't read it, so an XSS bug can't send it away), `SameSite=Lax`, `Path=/`, and in production `Secure` with the `__Host-` prefix (the browser then refuses the cookie unless it's HTTPS-only with no `Domain`, so no subdomain can set or overwrite it). Local http://localhost can do neither, so they're production-only.
+- **CSRF, what changes with a cookie:** a token in localStorage is only sent by our own JavaScript, so other sites can't use it; a cookie is sent by the browser automatically, so a page on another site could try to submit a request that rides on it (cross-site request forgery). How it's handled:
+  1. `SameSite=Lax` stops the browser attaching the cookie to cross-site POST/PUT/PATCH/DELETE requests. Lax rather than Strict because Strict would also drop it on the top-level redirect back from Google's sign-in page.
+  2. Lax still sends the cookie on top-level cross-site GET navigations, so **GET requests never change anything** (logout is a POST).
+  3. **Origin check** (`requireSameOrigin`), defence in depth: a state-changing request must carry an `Origin` whose host equals the request's `Host`, or a `Sec-Fetch-Site` of `same-origin`/`none`. Browsers set these headers themselves, so another site can't fake them. Requests with neither (curl, Supertest) are allowed, because CSRF needs a victim's browser to attach cookies. This works on every Vercel URL and behind the Vite proxy with no allow-list. `Origin: null` is rejected.
+  4. **JSON-only bodies:** the API only parses `application/json`, which a plain HTML form can't send cross-site without a CORS preflight, and there's no CORS.
+  5. Other `*.vercel.app` projects are cross-site to us, because `vercel.app` is on the Public Suffix List, so SameSite treats them as separate sites.
+- **`Cache-Control: no-store`** on every API response, so private data never sits in a shared cache.
+- **Caught by running it for real:** a manual end-to-end check through the Vite proxy found every same-origin POST blocked. Vite's string shorthand for a proxy turns on `changeOrigin`, which rewrote `Host` to `localhost:4200` while the browser's `Origin` stayed `localhost:5190`. Fixed with `changeOrigin: false` (which also matches production, where browser and API share one origin), and a client test pins the setting.
+
+### Demo host login, rate limits, app wiring
+
+- `POST /api/auth/demo` creates the demo host "Priya" (Asia/Kolkata) on first use: three calendars (Work and Personal count as busy, "Holidays in India" doesn't), weekday hours 10:00-13:00 and 14:00-18:00 plus Saturday mornings, the three event types, buffers 5/10 minutes, 4-hour notice, 30-day horizon, max 6 per day. Busy events cover the day before today through three weeks ahead, deterministic per date (seeded from the date), so a reset never reshuffles a day someone is looking at. Two simultaneous first logins are handled (the loser's unique violation is ignored). Phase 10 adds the periodic, locked reset.
+- **Rate limiting:** the Study Scheduler's Postgres-backed store, ported to TypeScript, so every serverless instance shares counts. Demo login: 30 per client per 15 minutes. Clients are keyed by the address Vercel's edge adds (trust proxy = 1 hop), so faking earlier `X-Forwarded-For` entries doesn't help (tested).
+- **`createApp({ db, production, now, rateLimits })`:** dependencies are passed in rather than read from module globals, so tests use the test database, move the clock (session expiry) and switch rate limits off without environment tricks.
+- **Tests:** a `*_test`-only guard before migrating or truncating, `prisma migrate deploy` once per run, files run one at a time against the shared test database. CI gets a Postgres 17 service (Neon's major version). Lint config: oxlint's `no-async-endpoint-handlers` is off for server code (an Express 4 concern; Express 5 forwards rejections, which a test proves), and Vitest's two-argument `expect(value, message)` is allowed.
+- **Mutation checks:** 10 deliberate breaks of the session, cookie and origin code (any Origin accepted, Sec-Fetch-Site ignored, SameSite=None, not httpOnly, token stored in plain text, expiry ignored or off by a millisecond, logout keeping the row, demo login leaving the old session valid, the demo race not tolerated): every one failed at least one test.
+
 ## Notes for later phases
 
-- **Phase 3:** decide the Prisma major version (the Study Scheduler pinned 6; check what 7+ needs with ESM + type stripping and on Vercel).
 - **Phase 4:** check Google's current testing-mode rules (test-user limit, refresh-token lifetime) and current scope list before documenting them.
 - **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.
 
 ### Phase 12 checklist
 
 - [ ] Confirm Vercel runs the server's `.ts` files with this setup (Node type stripping, no build step), including the `shared` workspace package imported from the API function. If it doesn't, decide between Vercel's own TS compilation and a bundling step, and record why.
+  - Early evidence from the phase 3 Prisma spike: Vercel's Node 24.21 has type stripping (`process.features.typescript = "strip"`), and it compiled an `api/index.ts` entry itself (it reported `api/index.js`) while `.ts` files it imported via relative `.ts` paths loaded fine. Not yet tested: the npm-workspace layout and importing `@calendar-aggregator/shared` from the function.
+- [ ] Confirm Prisma 6's query engine is bundled into the function in the workspace layout (it was without `includeFiles` in the single-package spike; the Study Scheduler's nested layout needed it).

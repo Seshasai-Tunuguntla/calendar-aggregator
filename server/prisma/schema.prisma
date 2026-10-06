@@ -1,0 +1,211 @@
+// Prisma 6 (see docs/PLAN.md, "Phase 3 decisions", for why not 7). The client is generated into
+// node_modules on install. Constraints Prisma can't express (CHECKs and the exclusion constraints)
+// are added by hand in the migrations; tests/db/constraints.test.ts checks they all still exist
+// after every migration.
+//
+// Every timestamp is `timestamptz`: Prisma's default `timestamp` has no time zone, and the
+// bookings' exclusion constraint builds `tstzrange` values, which would otherwise depend on the
+// database session's time zone setting.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProviderKind {
+  GOOGLE
+  DEMO
+}
+
+enum ConnectionStatus {
+  ACTIVE
+  NEEDS_RECONNECT
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+model User {
+  id       String  @id @default(uuid(7)) @db.Uuid
+  name     String
+  // Stored trimmed and lowercased.
+  email    String  @unique
+  // The public part of booking links (/book/:handle/:slug). Lowercase letters, digits and hyphens.
+  handle   String  @unique
+  // IANA zone, e.g. 'Asia/Kolkata'. Weekly rules are in this zone.
+  timeZone String
+  isDemo   Boolean @default(false)
+
+  // Scheduling settings: one set per host, used by all their event types.
+  bufferBeforeMinutes Int  @default(0)
+  bufferAfterMinutes  Int  @default(0)
+  minNoticeMinutes    Int  @default(240)
+  horizonDays         Int  @default(30)
+  // Null: no daily limit.
+  maxPerDay           Int?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  sessions          Session[]
+  connections       CalendarConnection[]
+  availabilityRules AvailabilityRule[]
+  eventTypes        EventType[]
+}
+
+// A signed-in browser. The cookie holds a random token; only its SHA-256 hash is stored, so a
+// database leak doesn't hand out working sessions. Deleting the row logs that browser out.
+model Session {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @db.Uuid
+  tokenHash String   @unique
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// One connected calendar account (Google, or the demo provider). A user can have several, e.g.
+// work and personal Google accounts, and can sign in with any of them.
+model CalendarConnection {
+  id                String           @id @default(uuid(7)) @db.Uuid
+  userId            String           @db.Uuid
+  provider          ProviderKind
+  // The provider's stable account id: Google's `sub` claim (emails can change). Unique per
+  // provider, so one Google account can't be connected to two users.
+  externalAccountId String
+  accountEmail      String
+  status            ConnectionStatus @default(ACTIVE)
+  // What the user actually granted: Google lets people untick scopes on the consent screen.
+  grantedScopes     String[]
+
+  // OAuth tokens, AES-256-GCM encrypted (phase 4); never logged. Null for the demo provider, and
+  // the refresh token stays null if Google didn't return one.
+  encryptedRefreshToken String?
+  encryptedAccessToken  String?
+  tokenKeyVersion       Int?
+  accessTokenExpiresAt  DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendars Calendar[]
+
+  @@unique([provider, externalAccountId])
+  @@index([userId])
+}
+
+// A calendar inside a connection, and whether its events make the host busy. Names are shown to
+// the host only, never on public pages.
+model Calendar {
+  id                 String  @id @default(uuid(7)) @db.Uuid
+  connectionId       String  @db.Uuid
+  externalCalendarId String
+  name               String
+  isPrimary          Boolean @default(false)
+  countsAsBusy       Boolean @default(true)
+
+  connection     CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  demoBusyEvents DemoBusyEvent[]
+
+  @@unique([connectionId, externalCalendarId])
+}
+
+// Weekly working hours in the host's time zone. weekday: 1 = Monday ... 7 = Sunday.
+// Hand-written constraints: CHECK 1 <= weekday <= 7 and 0 <= startMinute < endMinute <= 1440, and
+// an exclusion constraint so one host's rules on the same weekday never overlap (touching is fine).
+model AvailabilityRule {
+  id          String @id @default(uuid(7)) @db.Uuid
+  userId      String @db.Uuid
+  weekday     Int
+  startMinute Int
+  endMinute   Int
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model EventType {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  userId          String   @db.Uuid
+  // The last part of the booking link; unique per host.
+  slug            String
+  title           String
+  description     String   @default("")
+  durationMinutes Int
+  slotStepMinutes Int
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@unique([userId, slug])
+  // Target of Booking's composite foreign key, which guarantees booking.hostId is the event
+  // type's owner.
+  @@unique([id, userId])
+}
+
+// A guest's booking. hostId repeats the event type's owner because the exclusion constraint that
+// prevents double booking can only compare columns of this table:
+//   EXCLUDE USING gist ("hostId" WITH =, tstzrange("startsAt", "endsAt", '[)') WITH &&)
+//   WHERE (status = 'CONFIRMED')
+// so one host can never have two overlapping confirmed bookings, even if two requests race.
+model Booking {
+  id            String        @id @default(uuid(7)) @db.Uuid
+  eventTypeId   String        @db.Uuid
+  hostId        String        @db.Uuid
+  guestName     String
+  guestEmail    String
+  guestTimeZone String
+  startsAt      DateTime      @db.Timestamptz(3)
+  endsAt        DateTime      @db.Timestamptz(3)
+  status        BookingStatus @default(CONFIRMED)
+  // The event created on the host's calendar (phase 7).
+  externalEventId String?
+  // SHA-256 of the guest's manage-link token; the token itself is never stored.
+  manageTokenHash String        @unique
+  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
+  cancelledAt     DateTime?     @db.Timestamptz(3)
+
+  // Restrict: an event type with bookings can't be deleted (it's deactivated instead), so
+  // bookings are never lost by accident.
+  eventType EventType @relation(fields: [eventTypeId, hostId], references: [id, userId], onDelete: Restrict)
+
+  @@index([hostId, startsAt])
+}
+
+// The demo provider's calendar events: busy intervals only (no titles), like what we read from
+// Google. Bookings made with the demo host add rows here, as Google would add events.
+model DemoBusyEvent {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  calendarId String   @db.Uuid
+  startsAt   DateTime @db.Timestamptz(3)
+  endsAt     DateTime @db.Timestamptz(3)
+
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@index([calendarId, startsAt])
+}
+
+// Hit counts for the rate limiters, shared by every server instance (from the Study Scheduler).
+model RateLimit {
+  key       String @id
+  hits      Int
+  // When the window ends, in epoch milliseconds: plain numbers compared in SQL, so no time zone
+  // conversion can shift them.
+  resetAtMs BigInt
+
+  @@index([resetAtMs])
+}

@@ -10,7 +10,8 @@
     "typescript/no-explicit-any": "error",
     "typescript/no-non-null-assertion": "warn",
     "typescript/consistent-type-imports": "error",
-    "react/react-in-jsx-scope": "off"
+    "react/react-in-jsx-scope": "off",
+    "vitest/valid-expect": ["error", { "maxArgs": 2 }]
   },
   "env": {
     "es2024": true
@@ -18,7 +19,12 @@
   "overrides": [
     {
       "files": ["server/**", "shared/**"],
-      "env": { "node": true }
+      "env": { "node": true },
+      "rules": {
+        // Express 5 forwards rejected promises from async handlers to the error handler (tested in
+        // server/tests/unit/errorHandler.test.ts), so this Express 4 warning doesn't apply.
+        "oxc/no-async-endpoint-handlers": "off"
+      }
     },
     {
       "files": ["client/**"],

@@ -1,6 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { apiErrorSchema } from '@calendar-aggregator/shared';
 import { errorHandler, notFound } from '../../src/middleware/errorHandler.ts';
@@ -26,6 +27,19 @@ function appThatThrows() {
   });
   app.get('/exposed-5xx', () => {
     throw Object.assign(new Error('upstream detail'), { status: 502, expose: true });
+  });
+  app.get('/prisma-unique', () => {
+    throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['handle'] },
+    });
+  });
+  app.get('/prisma-not-found', () => {
+    throw new Prisma.PrismaClientKnownRequestError('Record to update not found', { code: 'P2025', clientVersion: 'test' });
+  });
+  app.get('/prisma-other', () => {
+    throw new Prisma.PrismaClientKnownRequestError('Foreign key constraint failed', { code: 'P2003', clientVersion: 'test' });
   });
   app.post('/echo', (req, res) => {
     res.json(req.body);
@@ -58,6 +72,25 @@ describe('errorHandler', () => {
     expect(res.body.error).toBe('Enter a valid email');
     expect(res.body.details).toHaveLength(1);
     expect(apiErrorSchema.safeParse(res.body).success).toBe(true);
+  });
+
+  it('turns a Prisma unique violation (P2002) into 409 naming the field', async () => {
+    const res = await request(appThatThrows()).get('/prisma-unique');
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'handle already in use' });
+  });
+
+  it('turns a Prisma "record not found" (P2025) into 404', async () => {
+    const res = await request(appThatThrows()).get('/prisma-not-found');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Record not found' });
+  });
+
+  it('treats other Prisma errors as unexpected (500)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(appThatThrows()).get('/prisma-other');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Internal server error' });
   });
 
   it('answers malformed JSON with 400 instead of 500', async () => {

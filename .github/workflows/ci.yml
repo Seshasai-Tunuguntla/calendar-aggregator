@@ -8,6 +8,22 @@ jobs:
   check:
     name: Typecheck, lint, tests and build
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Matches the major version Neon runs in production.
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          # The test setup refuses any database whose name doesn't end in _test.
+          POSTGRES_DB: calendar_aggregator_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -15,10 +31,14 @@ jobs:
           # Node 24 LTS: runs the server's .ts files directly with built-in type stripping.
           node-version: 24
           cache: npm
-      # One install at the root sets up all three workspaces from the single lockfile.
-      # `npm ci` (not `npm install`): the lockfile includes the Linux builds of the native tools.
+      # One install at the root sets up all three workspaces from the single lockfile, and the
+      # server's postinstall generates the Prisma client. `npm ci` (not `npm install`): the
+      # lockfile includes the Linux builds of the native tools.
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      # The server's test setup migrates this database (prisma migrate deploy) before any test runs.
       - run: npm test
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/calendar_aggregator_test
       - run: npm run build
