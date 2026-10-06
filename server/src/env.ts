@@ -1,11 +1,15 @@
 // Settings the API can't run without. Checked when a server or function instance starts, so a
 // missing one fails loudly at once instead of on the first request that needs it.
 const REQUIRED = ['DATABASE_URL'] as const;
+// Google sign-in is optional in development (the demo works without it) but required in
+// production, where real hosts sign in.
+const REQUIRED_IN_PRODUCTION = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'APP_ORIGIN', 'COOKIE_SIGNING_SECRET', 'TOKEN_ENCRYPTION_KEYS'] as const;
 
 type Env = Record<string, string | undefined>;
 
 export function missingEnv(env: Env = process.env): string[] {
-  return REQUIRED.filter((name) => !env[name]);
+  const required = isProduction(env) ? [...REQUIRED, ...REQUIRED_IN_PRODUCTION] : REQUIRED;
+  return required.filter((name) => !env[name]);
 }
 
 // Session cookies are Secure (HTTPS only) and get the __Host- prefix everywhere except local

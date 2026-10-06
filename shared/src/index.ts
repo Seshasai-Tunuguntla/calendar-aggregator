@@ -5,4 +5,6 @@ export * from './api/health.ts';
 export * from './api/errors.ts';
 export * from './api/availability.ts';
 export * from './api/auth.ts';
+export * from './api/connections.ts';
 export * from './time/localTime.ts';
+export * from './time/timeZone.ts';

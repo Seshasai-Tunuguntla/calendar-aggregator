@@ -70,9 +70,12 @@ for visitors without Google access. Explained in the README.
 
 ## Why the demo can't use real Google sign-in
 
-Until Google verifies the app it stays in "Testing" mode: only listed test users can sign in, and
-their refresh tokens expire after about 7 days (exact current rules to be checked against Google's
-docs in phase 4 and documented accurately). Recruiters must be able to try the app without that, so:
+Until Google verifies the app it stays in "Testing" mode (checked against Google's docs in October
+2026; details and sources in docs/google-setup.md): only listed test users can sign in (up to
+100), and because the app asks for Calendar scopes (not just name, email and profile), their
+refresh tokens expire after 7 days. Publishing with the sensitive `calendar.events.owned` scope
+would need Google's verification (privacy policy and home page on an owned domain, and a review).
+Recruiters must be able to try the app without any of that, so:
 
 - **"Try as host"** logs into a demo host backed by DemoCalendarProvider
 - **"Try booking"** opens the demo host's public booking page
@@ -248,7 +251,7 @@ goal; trade-off vs short caching to be explained).
 | 1 | Scaffold the TypeScript monorepo (client, server, shared), strict mode, lint, Vitest, CI with typecheck; this plan | Done |
 | 2 | Slot algorithm as pure functions, all required tests + reference implementation (approach explained first) | Done |
 | 3 | Prisma schema + migrations (incl. exclusion constraint), CalendarProvider interface, DemoCalendarProvider, demo host login, session cookies | Done |
-| 4 | Google OAuth: setup instructions, start/callback, PKCE, state, ID token verification, encrypted refresh tokens, refresh handling, disconnect; Google mocked in tests | |
+| 4 | Google OAuth: setup instructions, start/callback, PKCE, state, ID token verification, encrypted refresh tokens, refresh handling, disconnect; Google mocked in tests | Done |
 | 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | |
 | 6 | Availability rules, settings, event types, slots endpoint | |
 | 7 | Public booking: double-booking protection, Google event creation, manage token, cancel, reschedule, concurrency tests | |
@@ -357,9 +360,64 @@ Added by hand at the end of the init migration: the bookings' exclusion constrai
 - **Tests:** a `*_test`-only guard before migrating or truncating, `prisma migrate deploy` once per run, files run one at a time against the shared test database. CI gets a Postgres 17 service (Neon's major version). Lint config: oxlint's `no-async-endpoint-handlers` is off for server code (an Express 4 concern; Express 5 forwards rejections, which a test proves), and Vitest's two-argument `expect(value, message)` is allowed.
 - **Mutation checks:** 10 deliberate breaks of the session, cookie and origin code (any Origin accepted, Sec-Fetch-Site ignored, SameSite=None, not httpOnly, token stored in plain text, expiry ignored or off by a millisecond, logout keeping the row, demo login leaving the old session valid, the demo race not tolerated): every one failed at least one test.
 
+## Phase 4 decisions (Google OAuth)
+
+Setup steps for the Google Cloud project are in **docs/google-setup.md** (checked against Google's docs in October 2026, sources listed there).
+
+### Scopes (the narrowest that work)
+
+`openid email profile` for identity, plus three Calendar scopes picked from the per-method scope lists in Google's API reference:
+
+| Scope | Class | Needed for |
+|---|---|---|
+| `calendar.calendarlist.readonly` | non-sensitive | `calendarList.list`: choosing which calendars count as busy |
+| `calendar.freebusy` | non-sensitive | `freebusy.query`: busy intervals only, never event details |
+| `calendar.events.owned` | sensitive | `events.insert`/`events.delete` on calendars the user owns: the booking's event and its invitation |
+
+Not `calendar.readonly` (would expose every event's details) or `calendar.events` (edit rights on every calendar the user can access). `calendar.app.created` is narrower still but only covers calendars the app itself creates, so bookings wouldn't land on the host's own calendar. If a user unticks a Calendar scope on Google's consent screen (granular consent), the partial grant is revoked and they're told calendar access is needed.
+
+### The flow, step by step (`server/src/routes/googleAuth.ts`)
+
+1. **`GET /api/auth/google/start`** creates three random 32-byte values: `state` (CSRF on the callback), a PKCE `code_verifier` (its SHA-256 `code_challenge` goes to Google; the verifier never leaves the server until the code exchange) and an OIDC `nonce` (stops ID-token replay). They travel to the callback in **one signed cookie**: HMAC-SHA256 with `COOKIE_SIGNING_SECRET`, 10-minute expiry inside the signed payload, httpOnly, `SameSite=Lax` (Strict wouldn't be sent on the redirect back from accounts.google.com), Secure and `__Host-` in production. Signed, not stored server-side: nothing to clean up, and every value is single-use. Then a 302 to Google with `access_type=offline`, `include_granted_scopes=true`, `code_challenge_method=S256` and `prompt=select_account` (or `consent`, see 6).
+2. **Callback: the cookie** must be present, correctly signed and unexpired; it's cleared at once. A tampered, expired or missing cookie (including an attacker's callback link opened in a victim's browser) ends with `?error=expired`.
+3. **`state`** from Google must equal the cookie's (constant-time comparison), before the code is even exchanged. This stops login CSRF: an attacker sending someone a callback with the attacker's own code.
+4. **Code exchange** from the server with the client secret and the PKCE verifier. Errors carry only Google's error code and status, never the request body (tested: logs never contain the client secret, the code or the verifier).
+5. **ID token verification** with `jose`: RS256 signature against Google's published keys (JWKS, cached), issuer (`https://accounts.google.com` or `accounts.google.com`), audience (our client id), expiry (30 s clock tolerance), then our nonce, and `email_verified`. Only then is the identity trusted.
+6. **Refresh token:** Google returns one only on first consent. If none arrives, a stored one that still works is kept (re-encrypted under the current key). If there's no usable one (first time, or after "needs reconnect"), the callback restarts the flow once with `prompt=consent` and a `login_hint`, which makes Google issue a new one; if even that returns none, it stops with `?error=no_refresh_token` instead of looping.
+7. **Save and sign in.** Sign-in finds the user by the connection's Google `sub`, never by email: emails change and can be recycled, so a different Google account with the same address as a connected one must not reach that user's calendars (tested). A new user gets a handle from their name (`sesha-sai-tunuguntla`, a random suffix if taken) and the browser's time zone (validated; offsets like `+05:30` fall back to UTC). Then `startSession` issues a fresh session token (phase 3's fixation protection) and redirects to `/dashboard`. Errors redirect to `/login?error=<code>` (or `/calendars` when connecting) with a fixed code, never text from Google.
+
+**Connecting a second account** (`?intent=connect`) needs a signed-in, non-demo user; the user id goes into the signed cookie, and at the callback the browser must still be signed in as that same user (tested: signing out, or in as someone else, in between fails). An account already connected to another user is refused.
+
+### Tokens at rest (`server/src/auth/tokenCrypto.ts`)
+
+- **AES-256-GCM** (authenticated: tampering or a wrong key fails instead of producing garbage), a fresh random 12-byte IV per encryption, and **additional authenticated data `google:<sub>:<refresh|access>`**, so an encrypted token copied into another row or field won't decrypt. Format `iv.ciphertext.tag` (base64url).
+- **Versioned keys:** `TOKEN_ENCRYPTION_KEYS="2:<new>,1:<old>"`; the first encrypts, all decrypt, each row stores `tokenKeyVersion`. Rotation: put the new key first and deploy, run `npm run tokens:reencrypt --workspace server` (moves every row to the new key; a row refreshed at the same moment isn't overwritten), then remove the old key. Tested end to end, including decrypting with only the new key afterwards.
+- Access tokens are stored encrypted too, so serverless instances share them instead of refreshing on every request.
+- **Never logged:** tokens and secrets never appear in error messages; errors from Google carry its error code only.
+
+### Refresh and "needs reconnect" (`server/src/google/tokens.ts`)
+
+`GoogleTokens.accessToken(connectionId)` returns the stored access token while more than 5 minutes are left, otherwise refreshes it first (storing a rotated refresh token if Google sends one). On `invalid_grant` (revoked by the user, password change, or Testing mode's 7-day expiry) it marks the connection `NEEDS_RECONNECT`, deletes the dead tokens and throws a `CalendarProviderError('auth')`; later calls fail fast without calling Google. Network or other errors are `unavailable` and leave the connection `ACTIVE`. Signing in again (with the forced-consent retry from step 6) makes it `ACTIVE` again. Phase 5's Google provider uses this service.
+
+### Connections and disconnect
+
+- `GET /api/connections`: provider, account email, status (`ACTIVE` / `NEEDS_RECONNECT`, for the "Reconnect Google" state) and `canDisconnect`; never tokens.
+- `DELETE /api/connections/:id`: revokes the refresh token at Google (which also revokes its access tokens; Google's `invalid_token` for an already-revoked token counts as revoked), then deletes the connection and its calendars. If Google can't be reached, our copy is deleted anyway and the response says `revokedAtGoogle: false`. The last Google account can't be disconnected (409): it's how the user signs in, and signing in again would create a new, empty account. The demo calendar can't be disconnected; another user's connection is a 404.
+
+### Configuration
+
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `APP_ORIGIN` (the redirect URI is derived: `<APP_ORIGIN>/api/auth/google/callback`), `COOKIE_SIGNING_SECRET`, `TOKEN_ENCRYPTION_KEYS`. All optional in development (Google routes answer 503, the demo works), all required in production, and a partial set fails at startup naming what's missing (never a value). The redirect URI uses the client's port (5190) so the flow cookie and the session cookie live on the app's own origin.
+
+### Testing without Google
+
+A fake Google (`tests/helpers/fakeGoogle.ts`) behind the app's injected `fetch`: single-use codes bound to the PKCE challenge (the verifier is checked like Google does), real RS256 ID tokens signed with a key in a local JWKS (plus a second, unpublished key for forgery tests), revocable and optionally rotating refresh tokens, `invalid_grant` for revoked ones, refresh tokens only on first consent or `prompt=consent`, and switchable failures. A small cookie-keeping test browser drives start -> Google -> callback. Unit tests use the RFC 7636 PKCE example.
+
+**Mutation checks:** 22 deliberate weakenings (state not compared, nonce/audience/issuer/email_verified not checked, PKCE `plain`, cookie signature or expiry ignored, missing scopes accepted, no consent-loop guard, connect not checking which user is signed in, demo allowed to connect, no AAD, fixed IV, no refresh margin, `invalid_grant` not marking reconnect, network errors treated as `invalid_grant`, rotated refresh token dropped, disconnect not revoking, last account disconnectable, account looked up by email). Three survived the first run and each exposed a missing test (signed in as a different user during connect, refresh-token rotation, and the email-reuse takeover); after adding those, all 22 fail at least one test.
+
 ## Notes for later phases
 
-- **Phase 4:** check Google's current testing-mode rules (test-user limit, refresh-token lifetime) and current scope list before documenting them.
+- **Phase 5:** check with a real account whether `calendar.freebusy` also covers calendars shared with the user that they don't own (Google describes it as "your calendars"; `calendar.events.freebusy`, also non-sensitive, covers "calendars you have access to"). If not, switch scopes and update docs/google-setup.md. Also: sync the calendar list into `Calendar` rows after sign-in and connect.
+- **Phase 12:** add `https://<production domain>/api/auth/google/callback` to the OAuth client's redirect URIs, and the five Google variables to Vercel (Production scope only).
 - **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.
 
 ### Phase 12 checklist

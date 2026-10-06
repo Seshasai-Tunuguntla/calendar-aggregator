@@ -36,6 +36,15 @@ describe('env', () => {
     expect(missingEnv({ DATABASE_URL: 'postgresql://x' })).toEqual([]);
   });
 
+  it('requires the Google settings in production only', () => {
+    expect(missingEnv({ NODE_ENV: 'production', DATABASE_URL: 'postgresql://x', GOOGLE_CLIENT_ID: 'id' })).toEqual([
+      'GOOGLE_CLIENT_SECRET',
+      'APP_ORIGIN',
+      'COOKIE_SIGNING_SECRET',
+      'TOKEN_ENCRYPTION_KEYS',
+    ]);
+  });
+
   it('is production only when NODE_ENV says so', () => {
     expect(isProduction({ NODE_ENV: 'production' })).toBe(true);
     expect(isProduction({ NODE_ENV: 'test' })).toBe(false);
