@@ -9,6 +9,7 @@ future work session can pick up from the repo alone. Update the **Status** table
 - One phase at a time. Each phase ends with a summary and a pause for review before the next starts.
 - Briefly explain each decision. Code quality, tests, security and clear design decisions matter more than feature count.
 - Every commit passes its own tests. Each approved phase is committed, pushed to `main`, and CI is confirmed green before moving on.
+- A git pre-push hook (`.githooks/pre-push`, installed by `npm install`) runs the same checks as CI and blocks a failing push; no force-pushes to `main`. See README, "Development".
 - Commit messages: imperative subject, a body explaining what and why.
 
 ## Goal
@@ -50,6 +51,7 @@ project + Neon) but must look visually different from both earlier projects.
 8. Cancel/reschedule via a secret link given to the guest after booking.
 9. Host dashboard: upcoming bookings, event types, rules, connection status with a clear "Reconnect Google" state when access expires or is revoked.
 10. Self-resetting public demo.
+11. Delete my account: revoke Google access, delete all of the user's data, end the session (backend in phase 6, UI in phase 8).
 
 ## Architecture: the calendar provider interface
 
@@ -185,6 +187,7 @@ step 4 gives 09:00, 10:30, 11:00, 12:00 and 12:30. The 4-hour minimum notice the
 | GET / POST / PATCH / DELETE | `/api/event-types` | manage event types |
 | GET | `/api/bookings` | upcoming, paged |
 | POST | `/api/bookings/:id/cancel` | host cancels |
+| DELETE | `/api/account` | delete my account and all my data (see "Delete my account") |
 
 ### Public (no login, rate limited)
 | Method | Path | Purpose |
@@ -222,6 +225,20 @@ step 4 gives 09:00, 10:30, 11:00, 12:00 and 12:30. The 4-hour minimum notice the
 - Self-resetting with the Study Scheduler's protections: reset time stored in the database, 30-minute rule on cold starts and demo logins, a lock so only one rebuild runs, stable ids, demo accounts can't connect real Google accounts, everything a visitor can change is restored on reset
 - Busy events regenerated relative to "today" on each reset, so the demo never shows an empty or out-of-date week
 
+## Delete my account
+
+Added after the phase 4 review. Backend in phase 6, UI in phase 8.
+
+**`DELETE /api/account`**, body `{ confirmHandle }` (the user's own handle, so a stray request can't delete an account; the UI asks them to type it):
+
+1. **Refuse the demo host** (403): visitors can't delete the shared demo.
+2. **Cancel upcoming confirmed bookings** by deleting their events through the provider with `sendUpdates=all`, so Google tells each guest the meeting is off. Best effort: a failure is logged, not fatal.
+3. **Revoke Google access** for every Google connection (best effort, like disconnect: Google unreachable still deletes our copy).
+4. **Delete everything that belongs to the user in one transaction:** bookings (past ones too: guest names and emails are personal data), event types, availability rules, calendars, connections and their encrypted tokens, sessions, and the user. Bookings are deleted explicitly first because they restrict event type deletion (phase 3).
+5. **End the session:** clear the cookie, answer 204.
+
+**Tests:** every table is empty of the user's rows and other users' rows are untouched; refresh tokens are revoked at the fake Google; guests' events are deleted; the old session token stops working; a wrong `confirmHandle` changes nothing; the demo host gets 403; Google being unreachable still deletes the data (and the response says revocation failed); the request needs `Origin` (CSRF); signing in with the same Google account afterwards creates a fresh, empty user.
+
 ## Design rule
 
 This project must look **clearly different from both earlier projects**:
@@ -253,9 +270,9 @@ goal; trade-off vs short caching to be explained).
 | 3 | Prisma schema + migrations (incl. exclusion constraint), CalendarProvider interface, DemoCalendarProvider, demo host login, session cookies | Done |
 | 4 | Google OAuth: setup instructions, start/callback, PKCE, state, ID token verification, encrypted refresh tokens, refresh handling, disconnect; Google mocked in tests | Done |
 | 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | |
-| 6 | Availability rules, settings, event types, slots endpoint | |
+| 6 | Availability rules, settings, event types, slots endpoint; "Delete my account" backend | |
 | 7 | Public booking: double-booking protection, Google event creation, manage token, cancel, reschedule, concurrency tests | |
-| 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens | |
+| 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | |
 | 9 | Public booking frontend (guest flow end to end) | |
 | 10 | Self-resetting demo + tests | |
 | 11 | README for recruiters (diagrams, decisions, trade-offs, screenshots), Playwright smoke test | |

@@ -165,8 +165,21 @@ describe('GET /api/auth/google/callback: signing in', () => {
     expect(await db.user.count()).toBe(2);
   });
 
-  it('falls back to UTC for a missing or invalid browser time zone', async () => {
-    await signIn(SESHA, { query: '?tz=%2B05%3A30' });
+  it.each([
+    ['America/Argentina/Buenos_Aires', 'America/Argentina/Buenos_Aires'],
+    ['EST5EDT', 'EST5EDT'],
+    ['+05:30', 'UTC'],
+    ['Mars/Olympus_Mons', 'UTC'],
+    ['../../etc/passwd', 'UTC'],
+    [`Asia/${'K'.repeat(80)}`, 'UTC'],
+    ['', 'UTC'],
+  ])('validates ?tz=%s as a real IANA zone (stored as %s)', async (tz, stored) => {
+    await signIn(SESHA, { query: `?${new URLSearchParams({ tz })}` });
+    expect((await browser.get('/api/auth/me')).body.user.timeZone).toBe(stored);
+  });
+
+  it('uses UTC when no time zone is sent', async () => {
+    await signIn(SESHA, { query: '' });
     expect((await browser.get('/api/auth/me')).body.user.timeZone).toBe('UTC');
   });
 

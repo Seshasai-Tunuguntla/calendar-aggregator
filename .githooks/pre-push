@@ -1,0 +1,36 @@
+#!/bin/sh
+# Runs the same checks as CI (npm run check: typecheck, lint, tests, build) before anything reaches
+# GitHub, and blocks the push if they fail. Installed automatically by `npm install` (the root
+# "prepare" script points git's core.hooksPath at .githooks). See README.md, "Development".
+#
+# The checks run on the working folder, so they must match what's being pushed: the folder has to
+# be clean and the pushed commit has to be the checked-out one. Like CI, the tip of the push is
+# what gets checked.
+
+head=$(git rev-parse HEAD)
+
+# git passes one line per ref being pushed: <local ref> <local sha> <remote ref> <remote sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_sha" in
+    *[!0]*) ;;          # a real commit
+    *) continue ;;      # all zeros: deleting a remote branch, nothing to check
+  esac
+  if [ "$local_sha" != "$head" ]; then
+    echo "pre-push: $local_ref isn't the checked-out commit. Check it out first, so the checks run on what you push."
+    exit 1
+  fi
+done
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "pre-push: commit or stash these changes first, so the checks run on exactly what you push:"
+  git status --short
+  exit 1
+fi
+
+echo "pre-push: running the CI checks (npm run check)..."
+if ! npm run check --silent; then
+  echo ""
+  echo "pre-push: checks failed, push blocked. Fix them and push again."
+  exit 1
+fi
+echo "pre-push: all checks passed."

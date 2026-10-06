@@ -32,8 +32,9 @@ type Flow = z.infer<typeof flowSchema>;
 
 const startQuerySchema = z.object({
   intent: z.enum(['signin', 'connect']).default('signin'),
-  // The browser's time zone, used for a new account's working hours. Checked below.
-  tz: z.string().max(64).optional(),
+  // The browser's time zone, for a new account's working hours. Must be a real IANA zone
+  // (isValidTimeZone, below); anything else, including a fixed offset, falls back to UTC.
+  tz: z.string().optional(),
   // Ask Google for its consent screen again (needed to get a new refresh token).
   consent: z.literal('1').optional(),
   // Preselects the account on Google's screen, e.g. when reconnecting it.
