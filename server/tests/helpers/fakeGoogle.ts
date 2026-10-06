@@ -98,7 +98,9 @@ export class FakeGoogle {
    */
   /** Slow answers from the OAuth token endpoint (refreshes and code exchanges), in ms, each used once; honours the caller's AbortSignal. */
   readonly tokenDelays: number[] = [];
-  readonly calendarDelays: { ms: number; only?: 'calendarList' | 'freeBusy' | 'events'; afterApplying?: boolean }[] = [];
+  // `until`: also wait for this to settle, for tests that need one request held while another
+  // happens, whatever the timing.
+  readonly calendarDelays: { ms: number; only?: 'calendarList' | 'freeBusy' | 'events'; afterApplying?: boolean; until?: Promise<unknown> }[] = [];
   readonly calendarFailures: (
     | { status: number; reason: string; retryAfter?: string; only?: 'calendarList' | 'freeBusy' | 'events'; afterApplying?: boolean }
     | 'network'
@@ -185,7 +187,7 @@ export class FakeGoogle {
         await waitOrAbort(delay.ms, init?.signal);
         return response;
       }
-      await waitOrAbort(delay.ms, init?.signal);
+      await waitOrAbort(delay.ms, init?.signal, delay.until);
       return this.#calendarApi(url, init);
     }
     const form = Object.fromEntries(new URLSearchParams(String(init?.body ?? '')));
@@ -397,13 +399,13 @@ export class FakeGoogle {
 }
 
 // Resolves after `ms`, or rejects as fetch does when the signal aborts first.
-function waitOrAbort(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
+function waitOrAbort(ms: number, signal: AbortSignal | null | undefined, until?: Promise<unknown>): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(signal.reason);
       return;
     }
-    const timer = setTimeout(resolve, ms);
+    const timer = setTimeout(() => void (until ?? Promise.resolve()).finally(resolve), ms);
     signal?.addEventListener('abort', () => {
       clearTimeout(timer);
       reject(signal.reason);

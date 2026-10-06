@@ -489,13 +489,26 @@ describe('when Google is slow', () => {
   });
 
   it("doesn't wait long for another booking of the same host: the second guest is asked to try again", async () => {
+    // Google calls may take up to 2 s here, so the first booking can hold the host's lock for as
+    // long as the test needs; the lock wait stays at 50 ms.
+    app = makeApp({ ...SHORT, googleCallMs: 2_000 });
+    guest = new TestBrowser(app);
+    host = new TestBrowser(app);
     await setUpHost();
-    // The first booking holds the host's lock for 180 ms (a slow but successful Google call).
-    google.calendarDelays.push({ only: 'events', ms: 180 });
+    // The first booking's Google call (inside the lock) doesn't answer until the second guest has
+    // had their answer, so the order doesn't depend on how precisely timers fire on this machine.
+    let secondAnswered!: () => void;
+    const second = new Promise<void>((resolve) => (secondAnswered = resolve));
+    google.calendarDelays.push({ only: 'events', ms: 0, until: second });
     lineUp = { size: 2, waiting: [] };
-    const results = await Promise.all([book(AT_9, ALEX, guest), book(AT_930, SAM, new TestBrowser(app))]);
+    const started = Date.now();
+    // Whichever answers first is the one that didn't get the lock.
+    const answer = (req: ReturnType<typeof book>) => req.finally(secondAnswered);
+    const results = await Promise.all([book(AT_9, ALEX, guest), book(AT_930, SAM, new TestBrowser(app))].map(answer));
     expect(results.map((r) => r.status).toSorted()).toEqual([201, 503]);
     expect(results.find((r) => r.status === 503)?.body).toEqual({ error: 'Someone else is booking with Priyanka Rao right now. Please try again in a moment.' });
+    // Told quickly by the lock's own limit, not after the whole transaction's 3 seconds.
+    expect(Date.now() - started).toBeLessThan(1_500);
     expect(await db.booking.count()).toBe(1);
   });
 
