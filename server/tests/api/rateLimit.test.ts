@@ -4,6 +4,7 @@ import type { Options } from 'express-rate-limit';
 import { createApp } from '../../src/app.ts';
 import { PostgresStore } from '../../src/middleware/rateLimitStore.ts';
 import { useTestDatabase } from '../helpers/db.ts';
+import { fromOurPage } from '../helpers/http.ts';
 
 const db = useTestDatabase();
 
@@ -81,7 +82,7 @@ describe('PostgresStore', () => {
 
 describe('the demo login limiter', () => {
   const app = createApp({ db, production: false, rateLimits: true });
-  const login = (forwardedFor: string) => request(app).post('/api/auth/demo').set('X-Forwarded-For', forwardedFor);
+  const login = (forwardedFor: string) => fromOurPage(request(app).post('/api/auth/demo')).set('X-Forwarded-For', forwardedFor);
 
   it('allows 30 demo logins per client per 15 minutes, then answers 429', async () => {
     for (let i = 0; i < 30; i++) expect((await login('203.0.113.7')).status).toBe(200);

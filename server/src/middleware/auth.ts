@@ -1,16 +1,11 @@
 import type { Request, RequestHandler } from 'express';
-import { parse as parseCookies } from 'cookie';
 import type { Db } from '../db.ts';
-import { findSessionUser, sessionCookie, type AuthenticatedUser } from '../auth/sessions.ts';
+import { findSessionUser, sessionToken, type AuthenticatedUser } from '../auth/sessions.ts';
 import { HttpError } from '../utils/httpError.ts';
 
 // The signed-in user of a request, set by requireAuth. A WeakMap rather than a property on `req`,
 // so it's fully typed without augmenting Express's types, and nothing outlives the request.
 const users = new WeakMap<Request, AuthenticatedUser>();
-
-export function sessionToken(req: Request, production: boolean): string | undefined {
-  return parseCookies(req.headers.cookie ?? '')[sessionCookie(production).name];
-}
 
 export function requireAuth({ db, production, now }: { db: Db; production: boolean; now: () => Date }): RequestHandler {
   return async (req, _res, next) => {

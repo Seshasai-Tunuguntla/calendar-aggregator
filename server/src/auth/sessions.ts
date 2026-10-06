@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { CookieOptions } from 'express';
+import type { CookieOptions, Request, Response } from 'express';
+import { parse as parseCookies } from 'cookie';
 import type { Db } from '../db.ts';
 
+// A fixed lifetime from sign-in, not extended by use: after 14 days the host signs in again.
 export const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 // Session cookie settings. The CSRF reasoning is in docs/PLAN.md ("Phase 3 decisions"):
@@ -37,10 +39,45 @@ export async function createSession(db: Db, userId: string, now: Date): Promise<
   return { token, expiresAt };
 }
 
+// The session token the browser sent, if any.
+export function sessionToken(req: Request, production: boolean): string | undefined {
+  return parseCookies(req.headers.cookie ?? '')[sessionCookie(production).name];
+}
+
+// Signs a browser in. Every sign-in (demo or Google) goes through here, so all of them:
+// - issue a brand-new random token, never the one the browser sent. A token planted in the
+//   browser by an attacker (session fixation) therefore never becomes a signed-in session;
+// - delete the session the browser had before, so it can't be used any more;
+// - delete every expired session. Serverless instances have no reliable background timer, so
+//   cleanup happens as people sign in (the expiresAt index keeps it cheap).
+export async function startSession({
+  db,
+  req,
+  res,
+  production,
+  userId,
+  now,
+}: {
+  db: Db;
+  req: Request;
+  res: Response;
+  production: boolean;
+  userId: string;
+  now: Date;
+}): Promise<void> {
+  const previous = sessionToken(req, production);
+  if (previous) await deleteSession(db, previous);
+  await db.session.deleteMany({ where: { expiresAt: { lte: now } } });
+
+  const { token } = await createSession(db, userId, now);
+  const cookie = sessionCookie(production);
+  res.cookie(cookie.name, token, { ...cookie.options, maxAge: SESSION_TTL_MS });
+}
+
 export const sessionUserFields = { id: true, name: true, email: true, handle: true, timeZone: true, isDemo: true } as const;
 
 // The user a session token belongs to, or null if it's unknown or expired. An expired session is
-// deleted when it's seen; Phase 10's cleanup removes the ones nobody comes back with.
+// deleted when it's seen; startSession removes the ones nobody comes back with.
 export async function findSessionUser(db: Db, token: string, now: Date) {
   const session = await db.session.findUnique({
     where: { tokenHash: hashToken(token) },
