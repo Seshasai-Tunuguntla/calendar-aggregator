@@ -33,6 +33,9 @@ export default defineConfig({
       url: `http://localhost:${API_PORT}/api/health`,
       reuseExistingServer: false,
       timeout: 120_000,
+      // The API's own log lines appear with the test output, for diagnosing a failure.
+      stdout: 'pipe',
+      stderr: 'pipe',
     },
     {
       command: `npm run build && npx vite preview --port ${WEB_PORT}`,
