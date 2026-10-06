@@ -16,7 +16,7 @@ export const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.c
 // The narrowest scopes that work; docs/google-setup.md explains each one.
 export const CALENDAR_SCOPES = [
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
-  'https://www.googleapis.com/auth/calendar.freebusy',
+  'https://www.googleapis.com/auth/calendar.events.freebusy',
   'https://www.googleapis.com/auth/calendar.events.owned',
 ] as const;
 export const REQUESTED_SCOPES = ['openid', 'email', 'profile', ...CALENDAR_SCOPES];

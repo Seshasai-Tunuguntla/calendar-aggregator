@@ -7,6 +7,8 @@ import { isProduction } from './env.ts';
 import type { GoogleAuthConfig } from './google/config.ts';
 import { createIdTokenVerifier } from './google/idToken.ts';
 import { createGoogleOAuthClient } from './google/oauthClient.ts';
+import { GoogleTokens } from './google/tokens.ts';
+import { GoogleCalendarProvider } from './calendar/googleProvider.ts';
 import { requireAuth } from './middleware/auth.ts';
 import { errorHandler, notFound } from './middleware/errorHandler.ts';
 import { TRUST_PROXY_HOPS, createRateLimiter } from './middleware/rateLimit.ts';
@@ -27,7 +29,7 @@ export interface AppDeps {
    * Google sign-in. Null when it isn't configured (the demo still works). Tests pass a fake
    * Google: their own fetch and signing keys.
    */
-  google?: { config: GoogleAuthConfig; fetch?: typeof fetch; jwks?: JWTVerifyGetKey } | null;
+  google?: { config: GoogleAuthConfig; fetch?: typeof fetch; jwks?: JWTVerifyGetKey; sleep?: (ms: number) => Promise<void> } | null;
 }
 
 const passThrough: RequestHandler = (_req, _res, next) => next();
@@ -58,13 +60,7 @@ export function createApp({ db, production = isProduction(), now = () => new Dat
     res.json({ status: 'ok' } satisfies HealthResponse);
   });
 
-  const googleDeps = google
-    ? {
-        config: google.config,
-        oauth: createGoogleOAuthClient(google.config, google.fetch ?? fetch),
-        verifyIdToken: createIdTokenVerifier({ clientId: google.config.clientId, ...(google.jwks ? { jwks: google.jwks } : {}) }),
-      }
-    : null;
+  const googleDeps = google ? createGoogleDeps(db, google, now) : null;
   const signedIn = requireAuth({ db, production, now });
 
   // Each demo login creates a session row: 30 per client per 15 minutes is plenty for a visitor
@@ -81,4 +77,17 @@ export function createApp({ db, production = isProduction(), now = () => new Dat
   app.use(errorHandler);
 
   return app;
+}
+
+function createGoogleDeps(db: Db, google: NonNullable<AppDeps['google']>, now: () => Date) {
+  const fetchFn = google.fetch ?? fetch;
+  const oauth = createGoogleOAuthClient(google.config, fetchFn);
+  const tokens = new GoogleTokens({ db, oauth, keyring: google.config.keyring, now });
+  return {
+    config: google.config,
+    oauth,
+    verifyIdToken: createIdTokenVerifier({ clientId: google.config.clientId, ...(google.jwks ? { jwks: google.jwks } : {}) }),
+    tokens,
+    calendarProvider: new GoogleCalendarProvider({ tokens, fetch: fetchFn, ...(google.sleep ? { sleep: google.sleep } : {}) }),
+  };
 }

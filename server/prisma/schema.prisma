@@ -113,6 +113,9 @@ model Calendar {
   name               String
   isPrimary          Boolean @default(false)
   countsAsBusy       Boolean @default(true)
+  // The user owns it, so booking events can be created in it (calendar.events.owned covers
+  // owned calendars only). False for subscribed and shared calendars.
+  canCreateEvents    Boolean @default(false)
 
   connection     CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   demoBusyEvents DemoBusyEvent[]

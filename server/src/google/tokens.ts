@@ -57,23 +57,25 @@ export class GoogleTokens {
     this.#now = now;
   }
 
-  // A usable access token for a Google connection, refreshed first if it's (nearly) expired.
+  // A usable access token for a Google connection, refreshed first if it's (nearly) expired, or
+  // always with forceRefresh (when Google rejected the one we thought was valid).
   // Throws CalendarProviderError: 'auth' when the connection needs reconnecting (and marks it so),
   // 'unavailable' when Google can't be reached.
-  async accessToken(connectionId: string): Promise<string> {
+  async accessToken(connectionId: string, { forceRefresh = false }: { forceRefresh?: boolean } = {}): Promise<string> {
     const connection = await this.#db.calendarConnection.findUniqueOrThrow({ where: { id: connectionId } });
     if (connection.provider !== 'GOOGLE') throw new Error('Not a Google connection');
     if (connection.status === 'NEEDS_RECONNECT') throw new CalendarProviderError('auth', 'Google access needs reconnecting');
 
     const now = this.#now();
     const { encryptedAccessToken, accessTokenExpiresAt, tokenKeyVersion, externalAccountId } = connection;
-    if (encryptedAccessToken && accessTokenExpiresAt && tokenKeyVersion !== null && accessTokenExpiresAt.getTime() - now.getTime() > REFRESH_MARGIN_MS) {
+    const fresh = accessTokenExpiresAt !== null && accessTokenExpiresAt.getTime() - now.getTime() > REFRESH_MARGIN_MS;
+    if (!forceRefresh && fresh && encryptedAccessToken && tokenKeyVersion !== null) {
       return decryptToken(encryptedAccessToken, tokenKeyVersion, this.#keyring, tokenContext(externalAccountId, 'access'));
     }
 
     const refreshToken = decryptRefreshToken(connection, this.#keyring);
     if (!refreshToken) {
-      await this.#needsReconnect(connection.id);
+      await this.markNeedsReconnect(connection.id);
       throw new CalendarProviderError('auth', 'No refresh token stored; Google access needs reconnecting');
     }
 
@@ -83,7 +85,7 @@ export class GoogleTokens {
     } catch (error) {
       if (error instanceof GoogleOAuthError && error.isInvalidGrant) {
         // Revoked by the user, expired (7 days in Google's Testing mode), or the password changed.
-        await this.#needsReconnect(connection.id);
+        await this.markNeedsReconnect(connection.id);
         throw new CalendarProviderError('auth', 'Google access was revoked or expired', { cause: error });
       }
       throw new CalendarProviderError('unavailable', "Couldn't refresh Google access", { cause: error });
@@ -103,9 +105,9 @@ export class GoogleTokens {
     return refreshed.access_token;
   }
 
-  // The stored tokens are dead, so they're deleted rather than kept; the host's dashboard shows
-  // "Reconnect Google" and signing in again issues new ones.
-  async #needsReconnect(connectionId: string): Promise<void> {
+  // The stored tokens are dead (or lack a scope), so they're deleted rather than kept; the host's
+  // dashboard shows "Reconnect Google" and signing in again issues new ones.
+  async markNeedsReconnect(connectionId: string): Promise<void> {
     await this.#db.calendarConnection.update({
       where: { id: connectionId },
       data: { status: 'NEEDS_RECONNECT', encryptedAccessToken: null, encryptedRefreshToken: null, accessTokenExpiresAt: null, tokenKeyVersion: null },

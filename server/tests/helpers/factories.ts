@@ -47,7 +47,9 @@ export async function createDemoConnection(db: Db, userId: string, calendarIds: 
       provider: 'DEMO',
       externalAccountId: `demo-${unique()}`,
       accountEmail: 'demo@example.com',
-      calendars: { create: calendarIds.map((externalCalendarId, i) => ({ externalCalendarId, name: externalCalendarId, isPrimary: i === 0 })) },
+      calendars: {
+        create: calendarIds.map((externalCalendarId, i) => ({ externalCalendarId, name: externalCalendarId, isPrimary: i === 0, canCreateEvents: externalCalendarId !== 'holidays' })),
+      },
     },
     include: { calendars: true },
   });

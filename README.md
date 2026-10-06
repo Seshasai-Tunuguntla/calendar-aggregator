@@ -80,3 +80,7 @@ GitHub (`e5aa897`): the hook catches that before pushing, not after.
 Put the new key first in `TOKEN_ENCRYPTION_KEYS` (`"2:<new>,1:<old>"`), deploy, run
 `npm run tokens:reencrypt --workspace server`, then remove the old key. Details in
 [docs/PLAN.md](docs/PLAN.md), "Phase 4 decisions".
+
+## Known trade-offs
+
+- **Holidays don't block bookings.** Google's free/busy service can't read holiday calendars (checked on a real account; see "Free/busy scope" in [docs/PLAN.md](docs/PLAN.md)), and the app doesn't request the extra permission that reading their events would need (`calendar.events.public.readonly`, "See the events on public calendars"). To keep a holiday free, add it as an event or out-of-office on your own calendar; that does block bookings.

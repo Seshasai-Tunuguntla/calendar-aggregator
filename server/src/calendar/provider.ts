@@ -19,9 +19,16 @@ export interface ExternalCalendar {
   externalCalendarId: string;
   name: string;
   isPrimary: boolean;
+  /** The user owns it, so booking events can be created in it. */
+  canCreateEvents: boolean;
 }
 
 export interface NewCalendarEvent {
+  /**
+   * A UUID chosen by us (the booking's id). Creating an event with the same key twice creates it
+   * once, so a retry after a timeout can't produce a duplicate invitation.
+   */
+  idempotencyKey: string;
   /** The provider's id of the calendar to create the event in. */
   externalCalendarId: string;
   start: Date;
@@ -53,10 +60,13 @@ export type CalendarErrorKind = 'auth' | 'rate_limited' | 'not_found' | 'unavail
 
 export class CalendarProviderError extends Error {
   readonly kind: CalendarErrorKind;
+  /** The calendar the error is about, when it's about one (e.g. one that can't be read). */
+  readonly externalCalendarId: string | undefined;
 
-  constructor(kind: CalendarErrorKind, message: string, options?: { cause?: unknown }) {
+  constructor(kind: CalendarErrorKind, message: string, options?: { cause?: unknown; externalCalendarId?: string }) {
     super(message, options);
     this.name = 'CalendarProviderError';
     this.kind = kind;
+    this.externalCalendarId = options?.externalCalendarId;
   }
 }

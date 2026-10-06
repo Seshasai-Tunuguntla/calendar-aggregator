@@ -24,9 +24,9 @@ describe('DemoCalendarProvider', () => {
   it("lists the connection's calendars, primary first", async () => {
     const { ref } = await setup();
     expect(await provider.listCalendars(ref)).toEqual([
-      { externalCalendarId: 'work', name: 'work', isPrimary: true },
-      { externalCalendarId: 'holidays', name: 'holidays', isPrimary: false },
-      { externalCalendarId: 'personal', name: 'personal', isPrimary: false },
+      { externalCalendarId: 'work', name: 'work', isPrimary: true, canCreateEvents: true },
+      { externalCalendarId: 'holidays', name: 'holidays', isPrimary: false, canCreateEvents: false },
+      { externalCalendarId: 'personal', name: 'personal', isPrimary: false, canCreateEvents: true },
     ]);
   });
 
@@ -69,6 +69,7 @@ describe('DemoCalendarProvider', () => {
 
   describe('createEvent and deleteEvent', () => {
     const event = {
+      idempotencyKey: '0190a5a4-1111-7000-8000-000000000001',
       externalCalendarId: 'work',
       start: new Date('2026-10-12T09:00Z'),
       end: new Date('2026-10-12T09:30Z'),
@@ -86,6 +87,21 @@ describe('DemoCalendarProvider', () => {
       ]);
       const stored = await db.demoBusyEvent.findUniqueOrThrow({ where: { id: externalEventId } });
       expect(Object.keys(stored).toSorted()).toEqual(['calendarId', 'endsAt', 'id', 'startsAt']);
+    });
+
+    it('creates an event only once for the same idempotency key', async () => {
+      const { ref } = await setup();
+      const first = await provider.createEvent(ref, event);
+      const again = await provider.createEvent(ref, event);
+      expect(again).toEqual(first);
+      expect(first.externalEventId).toBe(event.idempotencyKey);
+      expect(await db.demoBusyEvent.count()).toBe(1);
+    });
+
+    it("refuses to create an event in a calendar the user doesn't own", async () => {
+      const { ref } = await setup();
+      const error = await provider.createEvent(ref, { ...event, externalCalendarId: 'holidays' }).catch((e: unknown) => e);
+      expect(error).toMatchObject({ kind: 'not_found', externalCalendarId: 'holidays' });
     });
 
     it("refuses to create an event in a calendar that isn't this connection's", async () => {
@@ -107,7 +123,7 @@ describe('DemoCalendarProvider', () => {
     it("can't delete another connection's event", async () => {
       const mine = await setup();
       const theirs = await setup();
-      const { externalEventId } = await provider.createEvent(theirs.ref, event);
+      const { externalEventId } = await provider.createEvent(theirs.ref, { ...event, idempotencyKey: '0190a5a4-1111-7000-8000-000000000002' });
       await provider.deleteEvent(mine.ref, 'work', externalEventId);
       expect(await db.demoBusyEvent.count()).toBe(1);
     });

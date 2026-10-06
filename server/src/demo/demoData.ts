@@ -50,10 +50,12 @@ export type DemoCalendarKey = keyof typeof DEMO_IDS.calendars;
 
 // Three calendars, so "which calendars count as busy" means something in the demo: the holidays
 // calendar has events but doesn't block bookings until the visitor ticks it.
-export const DEMO_CALENDARS: readonly { key: DemoCalendarKey; name: string; isPrimary: boolean; countsAsBusy: boolean }[] = [
-  { key: 'work', name: 'Work', isPrimary: true, countsAsBusy: true },
-  { key: 'personal', name: 'Personal', isPrimary: false, countsAsBusy: true },
-  { key: 'holidays', name: 'Holidays in India', isPrimary: false, countsAsBusy: false },
+// Like Google: Work and Personal are Priya's own calendars (events can be created there); the
+// holidays calendar is a subscribed one she can only read.
+export const DEMO_CALENDARS: readonly { key: DemoCalendarKey; name: string; isPrimary: boolean; countsAsBusy: boolean; canCreateEvents: boolean }[] = [
+  { key: 'work', name: 'Work', isPrimary: true, countsAsBusy: true, canCreateEvents: true },
+  { key: 'personal', name: 'Personal', isPrimary: false, countsAsBusy: true, canCreateEvents: true },
+  { key: 'holidays', name: 'Holidays in India', isPrimary: false, countsAsBusy: false, canCreateEvents: false },
 ];
 
 const hours = (from: string, to: string) => ({ startMinute: toMinute(from), endMinute: toMinute(to) });

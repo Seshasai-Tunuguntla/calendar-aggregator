@@ -13,7 +13,8 @@
     "db:deploy": "prisma migrate deploy",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "tokens:reencrypt": "node scripts/reencryptTokens.ts"
+    "tokens:reencrypt": "node scripts/reencryptTokens.ts",
+    "google:check": "node scripts/checkGoogleCalendars.ts"
   },
   "dependencies": {
     "@calendar-aggregator/shared": "*",

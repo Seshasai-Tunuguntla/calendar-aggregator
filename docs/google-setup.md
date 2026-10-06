@@ -51,7 +51,7 @@ Only listed test users can sign in (up to 100). Anyone else gets "Access blocked
    | `https://www.googleapis.com/auth/userinfo.email` | See your primary Google Account email address | Your account email | non-sensitive |
    | `https://www.googleapis.com/auth/userinfo.profile` | See your personal info | Your name, shown on your booking page | non-sensitive |
    | `https://www.googleapis.com/auth/calendar.calendarlist.readonly` | See the list of Google calendars you're subscribed to | So you can choose which calendars count as busy | non-sensitive |
-   | `https://www.googleapis.com/auth/calendar.freebusy` | View your availability in your calendars | Busy times only (`freebusy.query`); never titles, attendees or descriptions | non-sensitive |
+   | `https://www.googleapis.com/auth/calendar.events.freebusy` | See the availability on Google calendars you have access to | Busy times only (`freebusy.query`), including calendars shared with you; never titles, attendees or descriptions | non-sensitive |
    | `https://www.googleapis.com/auth/calendar.events.owned` | See, create, change, and delete events on Google calendars you own | Create the booking's event (Google emails the guest the invite) and delete it on cancel | **sensitive** |
 
 3. Click **Update**, then **Save**.

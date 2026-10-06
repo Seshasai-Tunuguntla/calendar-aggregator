@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import { parseKeyring } from '../../src/auth/tokenCrypto.ts';
+import { CALENDAR_API } from '../../src/calendar/googleProvider.ts';
 import { CALENDAR_SCOPES, GOOGLE_ENDPOINTS, type GoogleAuthConfig } from '../../src/google/config.ts';
 
 // A stand-in for Google's OAuth server, used through the app's injected fetch. It behaves like
@@ -29,6 +30,30 @@ export interface FakeAccount {
 const IDENTITY_SCOPES_GRANTED = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile'];
 export const ALL_SCOPES_GRANTED = [...IDENTITY_SCOPES_GRANTED, ...CALENDAR_SCOPES];
 
+// A calendar in the fake account. accessRole as Google reports it; busy is what freeBusy returns.
+export interface FakeCalendar {
+  id: string;
+  summary: string;
+  summaryOverride?: string;
+  accessRole: 'owner' | 'writer' | 'reader' | 'freeBusyReader';
+  primary?: boolean;
+  deleted?: boolean;
+  busy?: { start: string; end: string }[];
+  /** freeBusy reports this error for the calendar instead of its busy times. */
+  freeBusyError?: string;
+}
+
+export interface FakeEvent {
+  id: string;
+  calendarId: string;
+  summary: string;
+  start: string;
+  end: string;
+  attendees: { email: string; displayName?: string }[];
+  sendUpdates: string | null;
+  deleted: boolean;
+}
+
 interface IssuedCode {
   account: FakeAccount;
   nonce: string;
@@ -56,7 +81,14 @@ export class FakeGoogle {
   readonly #otherKey: CryptoKey;
   readonly #codes = new Map<string, IssuedCode>();
   readonly #refreshTokens = new Map<string, { account: FakeAccount; revoked: boolean }>();
-  readonly #accessTokens = new Map<string, { revoked: boolean }>();
+  readonly #accessTokens = new Map<string, { sub: string; revoked: boolean }>();
+  readonly #calendars = new Map<string, FakeCalendar[]>();
+  /** Events created through the API, by id. */
+  readonly events = new Map<string, FakeEvent>();
+  /** calendarList page size (Google's default is 100; small values test pagination). */
+  calendarListPageSize = 100;
+  /** Calendar API responses to give before behaving normally: each is used once, in order. */
+  readonly calendarFailures: ({ status: number; reason: string; retryAfter?: string } | 'network')[] = [];
   readonly #consented = new Set<string>();
 
   private constructor(privateKey: CryptoKey, otherKey: CryptoKey, jwks: JWTVerifyGetKey) {
@@ -113,8 +145,22 @@ export class FakeGoogle {
     return [...this.#refreshTokens.keys()];
   }
 
+  setCalendars(sub: string, calendars: FakeCalendar[]): void {
+    this.#calendars.set(sub, calendars);
+  }
+
+  /** Invalidate every access token (as if they had all expired early), keeping refresh tokens. */
+  revokeAccessTokens(): void {
+    for (const token of this.#accessTokens.values()) token.revoked = true;
+  }
+
+  get calendarRequests() {
+    return this.requests.filter((r) => r.url.startsWith(CALENDAR_API));
+  }
+
   readonly fetch: typeof fetch = async (input, init) => {
     const url = String(input);
+    if (url.startsWith(CALENDAR_API)) return this.#calendarApi(url, init);
     const form = Object.fromEntries(new URLSearchParams(String(init?.body ?? '')));
     this.requests.push({ url, form });
 
@@ -146,7 +192,7 @@ export class FakeGoogle {
     const challenge = createHash('sha256').update(form['code_verifier'] ?? '').digest('base64url');
     if (challenge !== issued.challenge) return Response.json({ error: 'invalid_grant' }, { status: 400 });
 
-    const accessToken = this.#newAccessToken();
+    const accessToken = this.#newAccessToken(issued.account.sub);
     let refreshToken: string | undefined;
     if (issued.issueRefreshToken) {
       refreshToken = `refresh-${randomBytes(16).toString('hex')}`;
@@ -172,7 +218,7 @@ export class FakeGoogle {
       this.#refreshTokens.set(rotated, { account: token.account, revoked: false });
     }
     return Response.json({
-      access_token: this.#newAccessToken(),
+      access_token: this.#newAccessToken(token.account.sub),
       expires_in: 3599,
       ...(rotated ? { refresh_token: rotated } : {}),
       scope: ALL_SCOPES_GRANTED.join(' '),
@@ -190,10 +236,96 @@ export class FakeGoogle {
     return new Response(null, { status: 200 });
   }
 
-  #newAccessToken(): string {
+  #newAccessToken(sub: string): string {
     const token = `access-${randomBytes(16).toString('hex')}`;
-    this.#accessTokens.set(token, { revoked: false });
+    this.#accessTokens.set(token, { sub, revoked: false });
     return token;
+  }
+
+  // The Calendar API: the four endpoints the provider uses.
+  async #calendarApi(url: string, init: RequestInit | undefined): Promise<Response> {
+    const method = init?.method ?? 'GET';
+    const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+    const headers = new Headers(init?.headers);
+    this.requests.push({ url, form: { method, body: JSON.stringify(body ?? null), authorization: headers.get('Authorization') ?? '' } });
+
+    const failure = this.calendarFailures.shift();
+    if (failure === 'network') throw new TypeError('fetch failed');
+    if (failure) {
+      return Response.json(
+        { error: { code: failure.status, message: 'fake', errors: [{ domain: 'global', reason: failure.reason }] } },
+        { status: failure.status, headers: failure.retryAfter ? { 'Retry-After': failure.retryAfter } : {} },
+      );
+    }
+
+    const token = this.#accessTokens.get((headers.get('Authorization') ?? '').replace(/^Bearer /, ''));
+    if (!token || token.revoked) {
+      return Response.json({ error: { code: 401, message: 'Invalid Credentials', errors: [{ reason: 'authError' }] } }, { status: 401 });
+    }
+    const calendars = this.#calendars.get(token.sub) ?? [];
+    const { pathname, searchParams } = new URL(url);
+    const path = pathname.slice(new URL(CALENDAR_API).pathname.length);
+
+    if (method === 'GET' && path === '/users/me/calendarList') {
+      const offset = Number(searchParams.get('pageToken') ?? 0);
+      const page = calendars.slice(offset, offset + this.calendarListPageSize);
+      const next = offset + this.calendarListPageSize < calendars.length ? String(offset + this.calendarListPageSize) : undefined;
+      return Response.json({ items: page.map(({ busy: _busy, freeBusyError: _error, ...item }) => item), ...(next ? { nextPageToken: next } : {}) });
+    }
+
+    if (method === 'POST' && path === '/freeBusy') {
+      const request = body as { timeMin: string; timeMax: string; items: { id: string }[] };
+      if (request.items.length > 50) return Response.json({ error: { code: 400, errors: [{ reason: 'tooManyCalendarsRequested' }] } }, { status: 400 });
+      const [min, max] = [Date.parse(request.timeMin), Date.parse(request.timeMax)];
+      const result: Record<string, unknown> = {};
+      for (const { id } of request.items) {
+        const calendar = calendars.find((c) => c.id === id);
+        if (!calendar) result[id] = { errors: [{ domain: 'global', reason: 'notFound' }], busy: [] };
+        else if (calendar.freeBusyError) result[id] = { errors: [{ domain: 'global', reason: calendar.freeBusyError }], busy: [] };
+        else {
+          const created = [...this.events.values()].filter((e) => e.calendarId === id && !e.deleted).map(({ start, end }) => ({ start, end }));
+          const busy = [...(calendar.busy ?? []), ...created].filter((b) => Date.parse(b.start) < max && Date.parse(b.end) > min);
+          result[id] = { busy };
+        }
+      }
+      return Response.json({ kind: 'calendar#freeBusy', timeMin: request.timeMin, timeMax: request.timeMax, calendars: result });
+    }
+
+    const eventsPath = /^\/calendars\/([^/]+)\/events(?:\/([^/]+))?$/.exec(path);
+    if (eventsPath) {
+      const calendarId = decodeURIComponent(eventsPath[1] ?? '');
+      const calendar = calendars.find((c) => c.id === calendarId);
+      if (!calendar) return Response.json({ error: { code: 404, errors: [{ reason: 'notFound' }] } }, { status: 404 });
+
+      if (method === 'POST' && !eventsPath[2]) {
+        if (calendar.accessRole !== 'owner') {
+          return Response.json({ error: { code: 403, errors: [{ reason: 'requiredAccessLevel' }] } }, { status: 403 });
+        }
+        const event = body as { id: string; summary: string; start: { dateTime: string }; end: { dateTime: string }; attendees: { email: string; displayName?: string }[] };
+        if (this.events.has(event.id)) return Response.json({ error: { code: 409, errors: [{ reason: 'duplicate' }] } }, { status: 409 });
+        this.events.set(event.id, {
+          id: event.id,
+          calendarId,
+          summary: event.summary,
+          start: event.start.dateTime,
+          end: event.end.dateTime,
+          attendees: event.attendees,
+          sendUpdates: searchParams.get('sendUpdates'),
+          deleted: false,
+        });
+        return Response.json({ id: event.id, status: 'confirmed' });
+      }
+
+      if (method === 'DELETE' && eventsPath[2]) {
+        const event = this.events.get(decodeURIComponent(eventsPath[2]));
+        if (!event || event.calendarId !== calendarId) return Response.json({ error: { code: 404, errors: [{ reason: 'notFound' }] } }, { status: 404 });
+        if (event.deleted) return Response.json({ error: { code: 410, errors: [{ reason: 'deleted' }] } }, { status: 410 });
+        event.deleted = true;
+        event.sendUpdates = searchParams.get('sendUpdates');
+        return new Response(null, { status: 204 });
+      }
+    }
+    return Response.json({ error: { code: 404, errors: [{ reason: 'notFound' }] } }, { status: 404 });
   }
 
   async #idToken(account: FakeAccount, nonce: string): Promise<string> {

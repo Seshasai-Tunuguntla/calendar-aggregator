@@ -269,7 +269,7 @@ goal; trade-off vs short caching to be explained).
 | 2 | Slot algorithm as pure functions, all required tests + reference implementation (approach explained first) | Done |
 | 3 | Prisma schema + migrations (incl. exclusion constraint), CalendarProvider interface, DemoCalendarProvider, demo host login, session cookies | Done |
 | 4 | Google OAuth: setup instructions, start/callback, PKCE, state, ID token verification, encrypted refresh tokens, refresh handling, disconnect; Google mocked in tests | Done |
-| 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | |
+| 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | Done (awaiting review; real-account scope check pending) |
 | 6 | Availability rules, settings, event types, slots endpoint; "Delete my account" backend | |
 | 7 | Public booking: double-booking protection, Google event creation, manage token, cancel, reschedule, concurrency tests | |
 | 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | |
@@ -388,7 +388,7 @@ Setup steps for the Google Cloud project are in **docs/google-setup.md** (checke
 | Scope | Class | Needed for |
 |---|---|---|
 | `calendar.calendarlist.readonly` | non-sensitive | `calendarList.list`: choosing which calendars count as busy |
-| `calendar.freebusy` | non-sensitive | `freebusy.query`: busy intervals only, never event details |
+| `calendar.events.freebusy` | non-sensitive | `freebusy.query`: busy intervals only, never event details, on every calendar the user can see (phase 5 found the narrower `calendar.freebusy` returns `notFound` for subscribed and shared calendars) |
 | `calendar.events.owned` | sensitive | `events.insert`/`events.delete` on calendars the user owns: the booking's event and its invitation |
 
 Not `calendar.readonly` (would expose every event's details) or `calendar.events` (edit rights on every calendar the user can access). `calendar.app.created` is narrower still but only covers calendars the app itself creates, so bookings wouldn't land on the host's own calendar. If a user unticks a Calendar scope on Google's consent screen (granular consent), the partial grant is revoked and they're told calendar access is needed.
@@ -431,9 +431,40 @@ A fake Google (`tests/helpers/fakeGoogle.ts`) behind the app's injected `fetch`:
 
 **Mutation checks:** 22 deliberate weakenings (state not compared, nonce/audience/issuer/email_verified not checked, PKCE `plain`, cookie signature or expiry ignored, missing scopes accepted, no consent-loop guard, connect not checking which user is signed in, demo allowed to connect, no AAD, fixed IV, no refresh margin, `invalid_grant` not marking reconnect, network errors treated as `invalid_grant`, rotated refresh token dropped, disconnect not revoking, last account disconnectable, account looked up by email). Three survived the first run and each exposed a missing test (signed in as a different user during connect, refresh-token rotation, and the email-reuse takeover); after adding those, all 22 fail at least one test.
 
+## Phase 5 decisions (Google Calendar provider)
+
+`server/src/calendar/googleProvider.ts` implements the phase 3 interface against the Calendar API with plain `fetch` (injected, so tests use the fake Google). Only three read endpoints exist in the code: `calendarList` (names and access roles, shown to the host only) and `freeBusy` (busy intervals only); event details are never requested, so they can't leak or be stored. Plus `events.insert` and `events.delete` for bookings.
+
+- **Fail closed on unreadable calendars.** `freeBusy` reports errors per calendar (`notFound` when it can't be read). If any requested calendar fails, `getBusyIntervals` throws (`not_found` or `unavailable`, naming the calendar) instead of returning the others' busy time: showing slots without knowing a calendar's busy time could double-book the host. Phase 6 turns this into a clear message for the host and no slots for guests.
+- **Limits:** at most 50 calendars per `freeBusy` request (documented) and ranges split into 60-day windows. Google doesn't document a maximum range; measured on a real account (6 Oct 2026), 92 days was accepted and 100 days rejected with `400 timeRangeTooLong`, so 60 leaves a wide margin.
+- **Errors, following [Google's guide](https://developers.google.com/workspace/calendar/api/guides/errors):** 401 -> refresh the access token once (`forceRefresh`) and retry, then `auth`; 403 `insufficientPermissions` -> mark the connection `NEEDS_RECONNECT` (`auth`); 429 and 403 `rateLimitExceeded`/`userRateLimitExceeded`, 5xx and network errors -> retried twice with exponential backoff and jitter (250 ms, 500 ms) or `Retry-After` (capped at 5 s, so a booking never hangs), then `rate_limited` / `unavailable`; 404 and other 403s -> `not_found`. Error messages never contain tokens (tested).
+- **Idempotent event creation:** `NewCalendarEvent.idempotencyKey` (the booking's UUID) becomes the Google event id (a UUID's hex digits are valid base32hex). If a create is retried after a timeout, Google answers 409 `duplicate` and the same id is returned, so a guest can never get two invitations. The demo provider does the same with an upsert. Phase 7 relies on this.
+- **Invitations:** `events.insert` and `events.delete` use `sendUpdates=all`, so Google emails the guest the invitation and the cancellation (no email sending of our own, as planned). Deleting is idempotent: 404 and 410 `deleted` count as success.
+- **Owned calendars only:** `calendar.events.owned` covers calendars the user owns, so a new `Calendar.canCreateEvents` column (migration `add_calendar_can_create_events`) records `accessRole === 'owner'`; creating an event elsewhere fails `not_found`. Phase 6/7 offer only these as the booking calendar.
+- **Calendar sync** (`syncCalendars`): after Google sign-in or connect, the calendar list is copied into `Calendar` rows. New calendars count as busy only if the user owns them (subscribed holidays, birthdays or a colleague's shared calendar usually shouldn't block bookings; the host can tick them). Later syncs keep the host's choices, update names and access, and remove calendars that are gone. Best effort during sign-in: if it fails, signing in still works and phase 6's calendars page syncs again.
+- **Tests:** the fake Google now serves the Calendar API (bearer-token checks, pagination, per-calendar `notFound`, created events becoming busy, 403 for non-owned calendars, 409 duplicates, 410 for deleted events, scripted failures with `Retry-After`). 22 provider tests; 16 mutation checks all failed at least one test.
+
+### Free/busy scope: `calendar.events.freebusy`
+
+Google describes `calendar.freebusy` as "View your availability in **your** calendars" and `calendar.events.freebusy` as "See the availability on Google calendars **you have access to**" ([scopes](https://developers.google.com/workspace/calendar/api/auth)); both are non-sensitive. Checked on a real Gmail account on 6 Oct 2026 with `npm run google:check --workspace server` (prints owned / not owned and whether `freeBusy` can read each calendar; counts only, no tokens or event details):
+
+| | `calendar.freebusy` only | with `calendar.events.freebusy` (token checked via tokeninfo) |
+|---|---|---|
+| own primary calendar | readable | readable |
+| subscribed "Holidays in India" (two variants) | `notFound` | `notFound` |
+| other public holiday calendars (US, UK), not subscribed | | `notFound` |
+| one 120-day request | `400 timeRangeTooLong` | `400 timeRangeTooLong` |
+
+So `freeBusy` doesn't serve Google's holiday calendars under either scope, and the holiday test can't tell the two scopes apart.
+
+**Untested:** a calendar shared by another person, the case `calendar.events.freebusy` is for. It stays untested until a calendar is shared from a second account with the test account; then rerun the check and record the result here.
+
+Decision: request `calendar.events.freebusy`, the scope Google documents for calendars the user has access to; it's equally non-sensitive and still returns busy times only. Connections made before the switch keep the old grant until the user signs in again.
+
+**For phase 6:** some calendars in the list can't be read by `freeBusy` at all (holiday calendars; probably birthdays/contacts too). Because busy lookups fail closed, ticking one would hide every slot. The calendars API must refuse to count such a calendar as busy, and the UI should explain why. Approved: during `syncCalendars`, one short `freeBusy` probe over all listed calendars records whether each can be read, rather than guessing from calendar id patterns. Refinement (approved): only a permanent answer (`notFound` for that calendar) marks it unreadable; a temporary failure (5xx, rate limits, network) must not, and instead shows a clear "can't check your calendar right now" state. Both cases tested.
+
 ## Notes for later phases
 
-- **Phase 5:** check with a real account whether `calendar.freebusy` also covers calendars shared with the user that they don't own (Google describes it as "your calendars"; `calendar.events.freebusy`, also non-sensitive, covers "calendars you have access to"). If not, switch scopes and update docs/google-setup.md. Also: sync the calendar list into `Calendar` rows after sign-in and connect.
 - **Phase 12:** add `https://<production domain>/api/auth/google/callback` to the OAuth client's redirect URIs, and the five Google variables to Vercel (Production scope only).
 - **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.
 
@@ -441,4 +472,5 @@ A fake Google (`tests/helpers/fakeGoogle.ts`) behind the app's injected `fetch`:
 
 - [ ] Confirm Vercel runs the server's `.ts` files with this setup (Node type stripping, no build step), including the `shared` workspace package imported from the API function. If it doesn't, decide between Vercel's own TS compilation and a bundling step, and record why.
   - Early evidence from the phase 3 Prisma spike: Vercel's Node 24.21 has type stripping (`process.features.typescript = "strip"`), and it compiled an `api/index.ts` entry itself (it reported `api/index.js`) while `.ts` files it imported via relative `.ts` paths loaded fine. Not yet tested: the npm-workspace layout and importing `@calendar-aggregator/shared` from the function.
+- [ ] In the Google console's Data Access, replace `calendar.freebusy` with `calendar.events.freebusy` (the local test client was set up before the phase 5 switch; Testing mode doesn't need it, verification does).
 - [ ] Confirm Prisma 6's query engine is bundled into the function in the workspace layout (it was without `includeFiles` in the single-package spike; the Study Scheduler's nested layout needed it).

@@ -26,7 +26,7 @@ export class DemoCalendarProvider implements CalendarProvider {
       where: { connectionId: connection.id },
       orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }],
     });
-    return calendars.map(({ externalCalendarId, name, isPrimary }) => ({ externalCalendarId, name, isPrimary }));
+    return calendars.map(({ externalCalendarId, name, isPrimary, canCreateEvents }) => ({ externalCalendarId, name, isPrimary, canCreateEvents }));
   }
 
   async getBusyIntervals(connection: ConnectionRef, externalCalendarIds: readonly string[], range: Interval): Promise<Interval[]> {
@@ -51,11 +51,17 @@ export class DemoCalendarProvider implements CalendarProvider {
     const calendar = await this.#db.calendar.findUnique({
       where: { connectionId_externalCalendarId: { connectionId: connection.id, externalCalendarId: event.externalCalendarId } },
     });
-    if (!calendar) throw new CalendarProviderError('not_found', 'Calendar not found');
+    if (!calendar) throw new CalendarProviderError('not_found', 'Calendar not found', { externalCalendarId: event.externalCalendarId });
+    if (!calendar.canCreateEvents) {
+      throw new CalendarProviderError('not_found', "Events can't be created in this calendar", { externalCalendarId: event.externalCalendarId });
+    }
 
-    // Only the time is kept: summary, description and attendees are deliberately not stored.
-    const created = await this.#db.demoBusyEvent.create({
-      data: { calendarId: calendar.id, startsAt: event.start, endsAt: event.end },
+    // The idempotency key is the event's id, so creating it again returns the same event. Only
+    // the time is kept: summary, description and attendees are deliberately not stored.
+    const created = await this.#db.demoBusyEvent.upsert({
+      where: { id: event.idempotencyKey },
+      create: { id: event.idempotencyKey, calendarId: calendar.id, startsAt: event.start, endsAt: event.end },
+      update: {},
     });
     return { externalEventId: created.id };
   }

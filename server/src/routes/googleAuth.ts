@@ -8,6 +8,8 @@ import { codeChallengeS256, randomUrlSafe, safeEqual } from '../auth/pkce.ts';
 import { signValue, verifyValue } from '../auth/signedCookie.ts';
 import { CALENDAR_SCOPES, type GoogleAuthConfig } from '../google/config.ts';
 import { connectGoogleAccount, signInWithGoogle } from '../google/accounts.ts';
+import type { CalendarProvider } from '../calendar/provider.ts';
+import { syncCalendars } from '../calendar/syncCalendars.ts';
 import type { IdTokenVerifier } from '../google/idToken.ts';
 import type { GoogleOAuthClient } from '../google/oauthClient.ts';
 import { decryptRefreshToken, encryptedTokenFields } from '../google/tokens.ts';
@@ -51,6 +53,7 @@ export interface GoogleAuthDeps {
   config: GoogleAuthConfig;
   oauth: GoogleOAuthClient;
   verifyIdToken: IdTokenVerifier;
+  calendarProvider: CalendarProvider;
 }
 
 export function googleAuthRouter({
@@ -121,7 +124,7 @@ export function googleAuthRouter({
       res.status(503).json({ error: "Google sign-in isn't set up on this server" });
       return;
     }
-    const { config, oauth, verifyIdToken } = google;
+    const { config, oauth, verifyIdToken, calendarProvider } = google;
 
     // 1. The flow cookie: signed by us, unexpired, and used once (cleared straight away).
     const rawFlow = verifyValue(parseCookies(req.headers.cookie ?? '')[flowCookie.name], config.cookieSecret, now().getTime());
@@ -186,10 +189,26 @@ export function googleAuthRouter({
         grantedScopes: granted,
       };
 
+      // 8 (after saving). Copy the account's calendar list, so the host can pick which count as
+      // busy. Best effort: if Google's list fails right now, signing in still works and the
+      // calendars page can sync again.
+      const syncAccountCalendars = async () => {
+        const connection = await db.calendarConnection.findUnique({
+          where: { provider_externalAccountId: { provider: 'GOOGLE', externalAccountId: identity.sub } },
+        });
+        if (!connection) return;
+        try {
+          await syncCalendars(db, calendarProvider, connection);
+        } catch (error) {
+          console.error('Syncing calendars after sign-in failed:', error instanceof Error ? error.message : error);
+        }
+      };
+
       // 7. Save, then sign in (a brand-new session token) or go back to the calendars page.
       if (flow.intent === 'signin') {
         const result = await signInWithGoogle(db, { identity, update, timeZone: flow.timeZone });
         if ('error' in result) return fail(result.error);
+        await syncAccountCalendars();
         await startSession({ db, req, res, production, userId: result.userId, now: now() });
         res.redirect(303, `${config.appOrigin}/dashboard`);
         return;
@@ -200,6 +219,7 @@ export function googleAuthRouter({
       if (!user || user.id !== flow.userId) return fail('signin_required');
       const result = await connectGoogleAccount(db, { userId: user.id, identity, update });
       if ('error' in result) return fail(result.error);
+      await syncAccountCalendars();
       res.redirect(303, `${config.appOrigin}/calendars?connected=1`);
     } catch (error) {
       // Google errors, a rejected ID token, or the database: the person gets a page they can act
