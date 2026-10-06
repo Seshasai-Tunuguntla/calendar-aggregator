@@ -16,17 +16,26 @@ export class TestBrowser {
     return this.#send(request(this.#app).get(path));
   }
 
-  post(path: string) {
-    return this.#send(request(this.#app).post(path).set('Origin', `http://${TEST_HOST}`));
+  post(path: string, body?: object) {
+    return this.#send(request(this.#app).post(path).set('Origin', `http://${TEST_HOST}`), body);
   }
 
-  delete(path: string) {
-    return this.#send(request(this.#app).delete(path).set('Origin', `http://${TEST_HOST}`));
+  put(path: string, body: object) {
+    return this.#send(request(this.#app).put(path).set('Origin', `http://${TEST_HOST}`), body);
   }
 
-  async #send(req: request.Test): Promise<request.Response> {
+  patch(path: string, body: object) {
+    return this.#send(request(this.#app).patch(path).set('Origin', `http://${TEST_HOST}`), body);
+  }
+
+  delete(path: string, body?: object) {
+    return this.#send(request(this.#app).delete(path).set('Origin', `http://${TEST_HOST}`), body);
+  }
+
+  async #send(req: request.Test, body?: object): Promise<request.Response> {
     req.set('Host', TEST_HOST);
     if (this.cookies.size > 0) req.set('Cookie', [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; '));
+    if (body !== undefined) req.send(body);
     const res = await req;
     for (const header of [res.headers['set-cookie'] ?? []].flat() as string[]) {
       const [pair = ''] = header.split(';');

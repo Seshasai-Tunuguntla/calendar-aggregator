@@ -1,7 +1,7 @@
 import { Temporal } from 'temporal-polyfill';
 import { describe, expect, it } from 'vitest';
 import { localParts, weeklyRulesSchema } from '@calendar-aggregator/shared';
-import { DEMO_EVENT_TYPES, DEMO_RULES, DEMO_TIME_ZONE, buildDemoBusyEvents } from '../../src/demo/demoData.ts';
+import { DEMO_CALENDARS, DEMO_EVENT_TYPES, DEMO_RULES, DEMO_TIME_ZONE, buildDemoBusyEvents } from '../../src/demo/demoData.ts';
 
 const MONDAY = Temporal.PlainDate.from('2026-10-12');
 
@@ -12,6 +12,15 @@ const tuesdayAsBuiltOn = (today: Temporal.PlainDate) =>
 describe('demo data', () => {
   it("has weekly rules the API would accept (no overlaps, nothing crossing midnight)", () => {
     expect(weeklyRulesSchema.safeParse(DEMO_RULES).success).toBe(true);
+  });
+
+  it("has a holiday calendar that behaves like Google's: its real id, unreadable, not counted as busy", () => {
+    expect(DEMO_CALENDARS.find((c) => c.key === 'holidays')).toMatchObject({
+      externalCalendarId: 'en.indian#holiday@group.v.calendar.google.com',
+      busyAccess: 'UNREADABLE',
+      countsAsBusy: false,
+    });
+    expect(DEMO_CALENDARS.filter((c) => c.busyAccess === 'READABLE').map((c) => c.name)).toEqual(['Work', 'Personal']);
   });
 
   it('has the three event types from the brief, with unique slugs', () => {

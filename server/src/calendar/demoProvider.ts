@@ -1,3 +1,4 @@
+import type { BusyAccess } from '@prisma/client';
 import type { Interval } from '@calendar-aggregator/shared/slots';
 import type { Db } from '../db.ts';
 import {
@@ -9,6 +10,11 @@ import {
 } from './provider.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Like Google, the demo can't read busy times from holiday calendars (Google's freeBusy answers
+// notFound for them; checked on a real account in phase 5). The demo's holiday calendar uses
+// Google's id for it, so it behaves the same way.
+const HOLIDAY_CALENDAR = /#holiday@group\.v\.calendar\.google\.com$/;
 
 // The demo provider: calendars are Calendar rows of a DEMO connection, and their events are
 // DemoBusyEvent rows (start and end only, the same information we read from Google). Creating an
@@ -32,6 +38,8 @@ export class DemoCalendarProvider implements CalendarProvider {
   async getBusyIntervals(connection: ConnectionRef, externalCalendarIds: readonly string[], range: Interval): Promise<Interval[]> {
     assertDemo(connection);
     if (externalCalendarIds.length === 0 || range.end <= range.start) return [];
+    const holiday = externalCalendarIds.find((id) => HOLIDAY_CALENDAR.test(id));
+    if (holiday) throw new CalendarProviderError('not_found', "Can't read free/busy for a calendar (notFound)", { externalCalendarId: holiday });
 
     const events = await this.#db.demoBusyEvent.findMany({
       where: {
@@ -44,6 +52,16 @@ export class DemoCalendarProvider implements CalendarProvider {
       orderBy: { startsAt: 'asc' },
     });
     return events.map((e) => ({ start: e.startsAt.getTime(), end: e.endsAt.getTime() }));
+  }
+
+  async checkBusyAccess(connection: ConnectionRef, externalCalendarIds: readonly string[]): Promise<Map<string, BusyAccess>> {
+    assertDemo(connection);
+    const existing = await this.#db.calendar.findMany({
+      where: { connectionId: connection.id, externalCalendarId: { in: [...externalCalendarIds] } },
+      select: { externalCalendarId: true },
+    });
+    const known = new Set(existing.map((c) => c.externalCalendarId));
+    return new Map(externalCalendarIds.map((id) => [id, known.has(id) && !HOLIDAY_CALENDAR.test(id) ? 'READABLE' : 'UNREADABLE']));
   }
 
   async createEvent(connection: ConnectionRef, event: NewCalendarEvent): Promise<{ externalEventId: string }> {

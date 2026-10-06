@@ -27,7 +27,6 @@ export async function ensureDemoHost(db: Db, now: Date): Promise<void> {
           ...calendar,
           id: DEMO_IDS.calendars[key],
           connectionId: DEMO_IDS.connection,
-          externalCalendarId: `demo-${key}`,
         })),
       }),
       db.availabilityRule.createMany({ data: DEMO_RULES.map((rule) => ({ ...rule, userId: DEMO_IDS.host })) }),

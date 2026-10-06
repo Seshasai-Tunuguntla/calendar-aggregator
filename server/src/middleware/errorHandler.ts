@@ -2,6 +2,7 @@ import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { Prisma } from '@prisma/client';
 import { ZodError } from 'zod';
 import type { ApiError } from '@calendar-aggregator/shared';
+import { HttpError } from '../utils/httpError.ts';
 
 export const notFound: RequestHandler = (_req, res) => {
   res.status(404).json({ error: 'Not found' } satisfies ApiError);
@@ -24,6 +25,13 @@ function asErrorWithStatus(err: unknown): ErrorWithStatus {
 export const errorHandler: ErrorRequestHandler = (err: unknown, _req, res, next) => {
   if (res.headersSent) {
     next(err);
+    return;
+  }
+
+  // Our own errors: always a client-safe message, whatever the status (a 503 says "try again
+  // later" when Google is down, for example).
+  if (err instanceof HttpError) {
+    res.status(err.status).json({ error: err.message } satisfies ApiError);
     return;
   }
 
@@ -53,8 +61,8 @@ export const errorHandler: ErrorRequestHandler = (err: unknown, _req, res, next)
     return;
   }
 
-  // Errors that carry their own 4xx status and a client-safe message:
-  // HttpError, and body-parser errors such as payload too large.
+  // Other errors that carry their own 4xx status and a client-safe message: body-parser errors
+  // such as payload too large. A 5xx from elsewhere is never trusted to be safe.
   if (e.expose === true && typeof e.status === 'number' && e.status >= 400 && e.status < 500) {
     res.status(e.status).json({ error: String(e.message) } satisfies ApiError);
     return;

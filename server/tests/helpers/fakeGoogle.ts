@@ -87,8 +87,11 @@ export class FakeGoogle {
   readonly events = new Map<string, FakeEvent>();
   /** calendarList page size (Google's default is 100; small values test pagination). */
   calendarListPageSize = 100;
-  /** Calendar API responses to give before behaving normally: each is used once, in order. */
-  readonly calendarFailures: ({ status: number; reason: string; retryAfter?: string } | 'network')[] = [];
+  /**
+   * Calendar API responses to give before behaving normally: each is used once, in order. `only`
+   * limits one to an endpoint, e.g. to let the calendar list work while freeBusy fails.
+   */
+  readonly calendarFailures: ({ status: number; reason: string; retryAfter?: string; only?: 'calendarList' | 'freeBusy' | 'events' } | 'network')[] = [];
   readonly #consented = new Set<string>();
 
   private constructor(privateKey: CryptoKey, otherKey: CryptoKey, jwks: JWTVerifyGetKey) {
@@ -249,7 +252,9 @@ export class FakeGoogle {
     const headers = new Headers(init?.headers);
     this.requests.push({ url, form: { method, body: JSON.stringify(body ?? null), authorization: headers.get('Authorization') ?? '' } });
 
-    const failure = this.calendarFailures.shift();
+    const endpoint = url.includes('/calendarList') ? 'calendarList' : url.includes('/freeBusy') ? 'freeBusy' : 'events';
+    const index = this.calendarFailures.findIndex((f) => f === 'network' || !f.only || f.only === endpoint);
+    const [failure] = index === -1 ? [] : this.calendarFailures.splice(index, 1);
     if (failure === 'network') throw new TypeError('fetch failed');
     if (failure) {
       return Response.json(

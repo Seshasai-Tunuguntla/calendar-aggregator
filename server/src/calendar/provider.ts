@@ -1,4 +1,4 @@
-import type { ProviderKind } from '@prisma/client';
+import type { BusyAccess, ProviderKind } from '@prisma/client';
 import type { Interval } from '@calendar-aggregator/shared/slots';
 
 // All calendar access goes through this interface. Two implementations:
@@ -46,6 +46,13 @@ export interface CalendarProvider {
    * titles or attendees. May overlap and come in any order; the slot algorithm merges them.
    */
   getBusyIntervals(connection: ConnectionRef, externalCalendarIds: readonly string[], range: Interval): Promise<Interval[]>;
+  /**
+   * Whether busy times can be read from each calendar: READABLE, UNREADABLE (the provider answered
+   * that it can't serve this calendar: permanent, e.g. Google's holiday calendars) or UNKNOWN (that
+   * calendar's check failed for a temporary reason). A failure of the whole request (network,
+   * rate limits, expired access) throws a CalendarProviderError instead.
+   */
+  checkBusyAccess(connection: ConnectionRef, externalCalendarIds: readonly string[]): Promise<Map<string, BusyAccess>>;
   createEvent(connection: ConnectionRef, event: NewCalendarEvent): Promise<{ externalEventId: string }>;
   /** Idempotent: deleting an event that's already gone succeeds. */
   deleteEvent(connection: ConnectionRef, externalCalendarId: string, externalEventId: string): Promise<void>;

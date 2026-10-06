@@ -98,3 +98,23 @@ describe('the demo login limiter', () => {
     expect((await login('10.9.9.9, 203.0.113.7')).status).toBe(429);
   }, 60_000);
 });
+
+describe('the public booking pages limiter', () => {
+  const app = createApp({ db, production: false, rateLimits: true });
+  const page = (path: string, forwardedFor: string) => request(app).get(`/api/public/book/${path}`).set('X-Forwarded-For', forwardedFor);
+
+  it('counts every public endpoint together in Postgres: 300 per client per 15 minutes, then 429', async () => {
+    // A page that doesn't exist still counts, so probing for handles is limited too.
+    for (let i = 0; i < 150; i++) {
+      expect((await page('nobody/call', '203.0.113.7')).status).toBe(404);
+      expect((await page('nobody/call/slots?from=2026-10-12&to=2026-10-13&tz=UTC', '203.0.113.7')).status).toBe(404);
+    }
+    expect((await page('nobody/call', '203.0.113.7')).status).toBe(429);
+    const blocked = await page('nobody/call/slots?from=2026-10-12&to=2026-10-13&tz=UTC', '203.0.113.7');
+    expect(blocked.status).toBe(429);
+    expect(blocked.body).toEqual({ error: 'Too many requests, please try again later' });
+    expect(await db.rateLimit.findUnique({ where: { key: 'public:203.0.113.7' } })).toMatchObject({ hits: 302 });
+    // Another client is unaffected.
+    expect((await page('nobody/call', '198.51.100.4')).status).toBe(404);
+  }, 120_000);
+});

@@ -67,6 +67,24 @@ describe('DemoCalendarProvider', () => {
     });
   });
 
+  describe('checkBusyAccess', () => {
+    it("reads its own calendars; like Google, not holiday calendars; and nothing that isn't this connection's", async () => {
+      const host = await createUser(db);
+      const connection = await createDemoConnection(db, host.id, ['work', 'en.indian#holiday@group.v.calendar.google.com']);
+      const ref: ConnectionRef = { id: connection.id, userId: host.id, provider: 'DEMO' };
+      const access = await provider.checkBusyAccess(ref, ['work', 'en.indian#holiday@group.v.calendar.google.com', 'someone-elses']);
+      expect(Object.fromEntries(access)).toEqual({
+        work: 'READABLE',
+        'en.indian#holiday@group.v.calendar.google.com': 'UNREADABLE',
+        'someone-elses': 'UNREADABLE',
+      });
+      await expect(provider.getBusyIntervals(ref, ['work', 'en.indian#holiday@group.v.calendar.google.com'], range('2026-10-12T00:00Z', '2026-10-13T00:00Z'))).rejects.toMatchObject({
+        kind: 'not_found',
+        externalCalendarId: 'en.indian#holiday@group.v.calendar.google.com',
+      });
+    });
+  });
+
   describe('createEvent and deleteEvent', () => {
     const event = {
       idempotencyKey: '0190a5a4-1111-7000-8000-000000000001',

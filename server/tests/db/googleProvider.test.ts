@@ -16,7 +16,8 @@ const DAY = 24 * 60 * 60 * 1000;
 const CALENDARS: FakeCalendar[] = [
   { id: 'team@group.calendar.google.com', summary: 'Team', accessRole: 'writer', busy: [{ start: '2026-10-12T05:00:00Z', end: '2026-10-12T06:00:00Z' }] },
   { id: 'host@gmail.com', summary: 'host@gmail.com', summaryOverride: 'Me', accessRole: 'owner', primary: true, busy: [{ start: '2026-10-12T04:00:00Z', end: '2026-10-12T04:30:00Z' }] },
-  { id: 'en.indian#holiday@group.v.calendar.google.com', summary: 'Holidays in India', accessRole: 'reader', busy: [{ start: '2026-10-20T00:00:00Z', end: '2026-10-21T00:00:00Z' }] },
+  // As on a real account: freeBusy answers notFound for holiday calendars.
+  { id: 'en.indian#holiday@group.v.calendar.google.com', summary: 'Holidays in India', accessRole: 'reader', freeBusyError: 'notFound' },
   { id: 'side@group.calendar.google.com', summary: 'Side project', accessRole: 'owner' },
   { id: 'old@group.calendar.google.com', summary: 'Old', accessRole: 'owner', deleted: true },
 ];
@@ -110,6 +111,36 @@ describe('getBusyIntervals', () => {
     expect(await provider.getBusyIntervals(connection, [], range('2026-10-12T00:00:00Z', '2026-10-13T00:00:00Z'))).toEqual([]);
     expect(await provider.getBusyIntervals(connection, ['host@gmail.com'], range('2026-10-12T00:00:00Z', '2026-10-12T00:00:00Z'))).toEqual([]);
     expect(google.calendarRequests).toHaveLength(0);
+  });
+});
+
+describe('checkBusyAccess', () => {
+  it('tells permanently unreadable calendars (notFound) apart from temporary per-calendar errors', async () => {
+    google.setCalendars(ACCOUNT.sub, [
+      ...CALENDARS,
+      { id: 'flaky@group.calendar.google.com', summary: 'Flaky', accessRole: 'reader', freeBusyError: 'backendError' },
+    ]);
+    const access = await provider.checkBusyAccess(connection, ['host@gmail.com', 'en.indian#holiday@group.v.calendar.google.com', 'flaky@group.calendar.google.com']);
+    expect(Object.fromEntries(access)).toEqual({
+      'host@gmail.com': 'READABLE',
+      'en.indian#holiday@group.v.calendar.google.com': 'UNREADABLE',
+      'flaky@group.calendar.google.com': 'UNKNOWN',
+    });
+    expect(google.calendarRequests).toHaveLength(1);
+  });
+
+  it('checks at most 50 calendars per request', async () => {
+    const many: FakeCalendar[] = Array.from({ length: 120 }, (_, i) => ({ id: `c${i}@group.calendar.google.com`, summary: `C${i}`, accessRole: 'reader' }));
+    google.setCalendars(ACCOUNT.sub, many);
+    const access = await provider.checkBusyAccess(connection, many.map((c) => c.id));
+    expect(access.size).toBe(120);
+    expect([...access.values()].every((a) => a === 'READABLE')).toBe(true);
+    expect(google.calendarRequests.map((r) => (JSON.parse(r.form['body'] ?? '{}') as { items: unknown[] }).items.length)).toEqual([50, 50, 20]);
+  });
+
+  it('throws (rather than calling anything unreadable) when the whole request fails', async () => {
+    google.calendarFailures.push(...Array.from({ length: 3 }, () => ({ status: 503, reason: 'backendError' })));
+    await expect(provider.checkBusyAccess(connection, ['host@gmail.com'])).rejects.toMatchObject({ kind: 'unavailable' });
   });
 });
 
@@ -235,12 +266,29 @@ describe('error handling', () => {
 const rows = () => db.calendar.findMany({ where: { connectionId: connection.id }, orderBy: { name: 'asc' } });
 
 describe('syncCalendars', () => {
-  it('runs on sign-in: calendars the user owns count as busy, subscribed and shared ones do not', async () => {
-    expect((await rows()).map((c) => [c.name, c.countsAsBusy, c.canCreateEvents, c.isPrimary])).toEqual([
-      ['Holidays in India', false, false, false],
-      ['Me', true, true, true],
-      ['Side project', true, true, false],
-      ['Team', false, false, false],
+  it('runs on sign-in: calendars the user owns count as busy, subscribed and shared ones do not, and access is recorded', async () => {
+    expect((await rows()).map((c) => [c.name, c.countsAsBusy, c.canCreateEvents, c.isPrimary, c.busyAccess])).toEqual([
+      ['Holidays in India', false, false, false, 'UNREADABLE'],
+      ['Me', true, true, true, 'READABLE'],
+      ['Side project', true, true, false, 'READABLE'],
+      ['Team', false, false, false, 'READABLE'],
+    ]);
+  });
+
+  it("doesn't let an owned calendar that can't be read count as busy by default", async () => {
+    google.setCalendars(ACCOUNT.sub, [{ id: 'odd@group.calendar.google.com', summary: 'Odd', accessRole: 'owner', freeBusyError: 'notFound' }]);
+    await syncCalendars(db, provider, connection);
+    expect((await rows()).map((c) => [c.name, c.countsAsBusy, c.busyAccess])).toEqual([['Odd', false, 'UNREADABLE']]);
+  });
+
+  it("saves the list with access UNKNOWN when only the access check fails (temporary), never UNREADABLE", async () => {
+    google.calendarFailures.push(...Array.from({ length: 3 }, () => ({ status: 503, reason: 'backendError', only: 'freeBusy' as const })));
+    await syncCalendars(db, provider, connection);
+    expect((await rows()).map((c) => [c.name, c.busyAccess])).toEqual([
+      ['Holidays in India', 'UNKNOWN'],
+      ['Me', 'UNKNOWN'],
+      ['Side project', 'UNKNOWN'],
+      ['Team', 'UNKNOWN'],
     ]);
   });
 

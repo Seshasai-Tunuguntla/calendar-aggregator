@@ -48,14 +48,30 @@ export const DEMO_CONNECTION = {
 
 export type DemoCalendarKey = keyof typeof DEMO_IDS.calendars;
 
-// Three calendars, so "which calendars count as busy" means something in the demo: the holidays
-// calendar has events but doesn't block bookings until the visitor ticks it.
-// Like Google: Work and Personal are Priya's own calendars (events can be created there); the
-// holidays calendar is a subscribed one she can only read.
-export const DEMO_CALENDARS: readonly { key: DemoCalendarKey; name: string; isPrimary: boolean; countsAsBusy: boolean; canCreateEvents: boolean }[] = [
-  { key: 'work', name: 'Work', isPrimary: true, countsAsBusy: true, canCreateEvents: true },
-  { key: 'personal', name: 'Personal', isPrimary: false, countsAsBusy: true, canCreateEvents: true },
-  { key: 'holidays', name: 'Holidays in India', isPrimary: false, countsAsBusy: false, canCreateEvents: false },
+// Three calendars, like a typical Google account. Work and Personal are Priya's own (events can be
+// created there, and unticking Personal visibly changes the free slots). "Holidays in India" is a
+// subscribed calendar with Google's real id: Google won't share free/busy for holiday calendars,
+// so, as in the real app, it can't count as busy (see the README's known trade-offs).
+export const DEMO_CALENDARS: readonly {
+  key: DemoCalendarKey;
+  externalCalendarId: string;
+  name: string;
+  isPrimary: boolean;
+  countsAsBusy: boolean;
+  canCreateEvents: boolean;
+  busyAccess: 'READABLE' | 'UNREADABLE';
+}[] = [
+  { key: 'work', externalCalendarId: 'demo-work', name: 'Work', isPrimary: true, countsAsBusy: true, canCreateEvents: true, busyAccess: 'READABLE' },
+  { key: 'personal', externalCalendarId: 'demo-personal', name: 'Personal', isPrimary: false, countsAsBusy: true, canCreateEvents: true, busyAccess: 'READABLE' },
+  {
+    key: 'holidays',
+    externalCalendarId: 'en.indian#holiday@group.v.calendar.google.com',
+    name: 'Holidays in India',
+    isPrimary: false,
+    countsAsBusy: false,
+    canCreateEvents: false,
+    busyAccess: 'UNREADABLE',
+  },
 ];
 
 const hours = (from: string, to: string) => ({ startMinute: toMinute(from), endMinute: toMinute(to) });
@@ -76,7 +92,8 @@ export const DEMO_EVENT_TYPES = [
 ] as const;
 
 export interface DemoBusyEventData extends Interval {
-  calendar: DemoCalendarKey;
+  // No holiday events: that calendar's busy times can't be read (see DEMO_CALENDARS).
+  calendar: Exclude<DemoCalendarKey, 'holidays'>;
 }
 
 // Optional work meetings; each weekday gets a different mix (see busyEventsFor).
@@ -95,7 +112,7 @@ export function buildDemoBusyEvents(today: Temporal.PlainDate, days = 21): DemoB
 }
 
 function busyEventsFor(date: Temporal.PlainDate): DemoBusyEventData[] {
-  const at = (calendar: DemoCalendarKey, slot: { startMinute: number; endMinute: number }) => ({
+  const at = (calendar: DemoBusyEventData['calendar'], slot: { startMinute: number; endMinute: number }) => ({
     calendar,
     start: localMinute(date, slot.startMinute),
     end: localMinute(date, slot.endMinute),
@@ -117,8 +134,6 @@ function busyEventsFor(date: Temporal.PlainDate): DemoBusyEventData[] {
     if (random() < 0.25) events.push(at('personal', hours('11:00', '12:00'))); // an errand
   }
   if (date.dayOfWeek === 6 && random() < 0.5) events.push(at('personal', hours('10:00', '11:00')));
-  // A holiday about once a fortnight: on a calendar that doesn't count as busy by default.
-  if (random() < 0.07) events.push({ calendar: 'holidays', start: localMinute(date, 0), end: localMinute(date.add({ days: 1 }), 0) });
 
   return events;
 }

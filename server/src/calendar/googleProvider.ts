@@ -1,3 +1,4 @@
+import type { BusyAccess } from '@prisma/client';
 import { z } from 'zod';
 import { DAY_MS, type Interval } from '@calendar-aggregator/shared/slots';
 import type { GoogleTokens } from '../google/tokens.ts';
@@ -29,6 +30,8 @@ export const CALENDAR_API = 'https://www.googleapis.com/calendar/v3';
 const MAX_CALENDARS_PER_QUERY = 50;
 const MAX_RANGE_MS = 60 * DAY_MS;
 const MAX_RETRIES = 2;
+// checkBusyAccess only needs freeBusy's per-calendar answer, not busy times; any short range works.
+const ACCESS_CHECK_RANGE_MS = 60 * 60 * 1000;
 const RATE_LIMIT_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded']);
 
 const calendarListSchema = z.object({
@@ -130,6 +133,28 @@ export class GoogleCalendarProvider implements CalendarProvider {
       }
     }
     return intervals;
+  }
+
+  // One freeBusy request per 50 calendars. Google answers notFound for a calendar it won't serve
+  // free/busy for (checked on a real account: holiday calendars, under either free/busy scope),
+  // which is permanent; any other per-calendar error (backendError, internalError...) may pass.
+  async checkBusyAccess(connection: ConnectionRef, externalCalendarIds: readonly string[]): Promise<Map<string, BusyAccess>> {
+    const access = new Map<string, BusyAccess>();
+    const start = Date.now();
+    for (const ids of chunk(externalCalendarIds, MAX_CALENDARS_PER_QUERY)) {
+      const { body } = await this.#call(connection, 'POST', '/freeBusy', {
+        timeMin: new Date(start).toISOString(),
+        timeMax: new Date(start + ACCESS_CHECK_RANGE_MS).toISOString(),
+        items: ids.map((id) => ({ id })),
+      });
+      const result = parse(freeBusySchema, body);
+      for (const id of ids) {
+        const calendar = result.calendars[id];
+        const reason = calendar?.errors?.[0]?.reason;
+        access.set(id, !calendar ? 'UNKNOWN' : reason === 'notFound' ? 'UNREADABLE' : reason ? 'UNKNOWN' : 'READABLE');
+      }
+    }
+    return access;
   }
 
   // sendUpdates=all: Google emails the invitation to the guest. The event id is derived from our

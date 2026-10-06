@@ -15,6 +15,9 @@ function appThatThrows() {
   app.get('/http-error', () => {
     throw new HttpError(409, 'That time was just taken');
   });
+  app.get('/http-error-503', () => {
+    throw new HttpError(503, "Can't check your calendar right now");
+  });
   app.get('/zod-error', () => {
     z.object({ email: z.email('Enter a valid email') }).parse({ email: 'nope' });
   });
@@ -58,6 +61,12 @@ describe('errorHandler', () => {
     const res = await request(appThatThrows()).get('/http-error');
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: 'That time was just taken' });
+  });
+
+  it("passes an HttpError's 503 and message through (\"try again later\" must reach the user)", async () => {
+    const res = await request(appThatThrows()).get('/http-error-503');
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "Can't check your calendar right now" });
   });
 
   it('catches errors thrown from async handlers (Express 5)', async () => {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { timeZoneSchema } from '../time/timeZone.ts';
 
 const MINUTES_PER_DAY = 24 * 60;
 const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -58,3 +59,24 @@ export const weeklyRulesSchema = z
 export function formatMinute(minute: number): string {
   return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 }
+
+// Settings that apply to all of a host's event types. The same ranges as the database's CHECK.
+export const schedulingSettingsSchema = z.object({
+  bufferBeforeMinutes: z.int().min(0, 'Buffers are 0 to 240 minutes').max(240, 'Buffers are 0 to 240 minutes'),
+  bufferAfterMinutes: z.int().min(0, 'Buffers are 0 to 240 minutes').max(240, 'Buffers are 0 to 240 minutes'),
+  // Up to 30 days.
+  minNoticeMinutes: z.int().min(0, 'Minimum notice is 0 minutes to 30 days').max(43_200, 'Minimum notice is 0 minutes to 30 days'),
+  horizonDays: z.int().min(1, 'Guests can book 1 to 365 days ahead').max(365, 'Guests can book 1 to 365 days ahead'),
+  // null: no daily limit.
+  maxPerDay: z.int().min(1, 'The daily limit is 1 to 50 bookings').max(50, 'The daily limit is 1 to 50 bookings').nullable(),
+});
+export type SchedulingSettings = z.infer<typeof schedulingSettingsSchema>;
+
+// GET and PUT /api/availability: the host's time zone, weekly rules (in that zone) and settings.
+// PUT replaces all of it.
+export const availabilitySchema = z.object({
+  timeZone: timeZoneSchema,
+  rules: weeklyRulesSchema,
+  settings: schedulingSettingsSchema,
+});
+export type Availability = z.infer<typeof availabilitySchema>;

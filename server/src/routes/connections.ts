@@ -4,9 +4,8 @@ import type { ConnectionsResponse, DisconnectResponse } from '@calendar-aggregat
 import type { Db } from '../db.ts';
 import { currentUser } from '../middleware/auth.ts';
 import { HttpError } from '../utils/httpError.ts';
-import { decryptToken, type Keyring } from '../auth/tokenCrypto.ts';
-import type { GoogleOAuthClient } from '../google/oauthClient.ts';
-import { decryptRefreshToken, tokenContext } from '../google/tokens.ts';
+import { invalidateBusyCache } from '../calendar/busyCache.ts';
+import { revokeGoogleAccess, type GoogleRevoker } from '../google/revoke.ts';
 
 const idParamSchema = z.object({ id: z.uuid('Connection not found') });
 
@@ -17,7 +16,7 @@ export function connectionsRouter({
 }: {
   db: Db;
   requireAuth: RequestHandler;
-  google: { oauth: GoogleOAuthClient; keyring: Keyring } | null;
+  google: GoogleRevoker | null;
 }): Router {
   const router = Router();
   router.use(requireAuth);
@@ -57,27 +56,9 @@ export function connectionsRouter({
       throw new HttpError(409, "This is the Google account you sign in with. Connect another account before disconnecting it.");
     }
 
-    let revokedAtGoogle = false;
-    if (google) {
-      try {
-        // Revoking the refresh token revokes its access tokens too; fall back to the access token.
-        const token =
-          decryptRefreshToken(connection, google.keyring) ??
-          (connection.encryptedAccessToken && connection.tokenKeyVersion !== null
-            ? decryptToken(connection.encryptedAccessToken, connection.tokenKeyVersion, google.keyring, tokenContext(connection.externalAccountId, 'access'))
-            : null);
-        if (token) {
-          await google.oauth.revoke(token);
-          revokedAtGoogle = true;
-        }
-      } catch (error) {
-        // Google unreachable (or the token can't be decrypted): still delete our copy. The user
-        // can also remove access at myaccount.google.com/permissions.
-        console.error('Revoking Google access failed:', error instanceof Error ? error.message : error);
-      }
-    }
-
+    const revokedAtGoogle = await revokeGoogleAccess(google, connection);
     await db.calendarConnection.delete({ where: { id: connection.id } });
+    await invalidateBusyCache(db, user.id);
     res.json({ revokedAtGoogle } satisfies DisconnectResponse);
   });
 

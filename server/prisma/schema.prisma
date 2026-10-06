@@ -26,6 +26,19 @@ enum ConnectionStatus {
   NEEDS_RECONNECT
 }
 
+// Whether a calendar's busy times can be read (checked with one freeBusy request when calendars
+// are synced, and again whenever the host ticks a calendar as busy).
+// - READABLE: the last check worked.
+// - UNREADABLE: the provider answered that it can't serve this calendar, which is permanent
+//   (Google's holiday calendars, for example). It can't count as busy.
+// - UNKNOWN: not checked yet, or the last check failed for a temporary reason (Google down, rate
+//   limited, network). The host sees "can't check your calendar right now", not "unreadable".
+enum BusyAccess {
+  READABLE
+  UNREADABLE
+  UNKNOWN
+}
+
 enum BookingStatus {
   CONFIRMED
   CANCELLED
@@ -56,6 +69,7 @@ model User {
   connections       CalendarConnection[]
   availabilityRules AvailabilityRule[]
   eventTypes        EventType[]
+  busyCache         BusyCache[]
 }
 
 // A signed-in browser. The cookie holds a random token; only its SHA-256 hash is stored, so a
@@ -107,18 +121,20 @@ model CalendarConnection {
 // A calendar inside a connection, and whether its events make the host busy. Names are shown to
 // the host only, never on public pages.
 model Calendar {
-  id                 String  @id @default(uuid(7)) @db.Uuid
-  connectionId       String  @db.Uuid
+  id                 String     @id @default(uuid(7)) @db.Uuid
+  connectionId       String     @db.Uuid
   externalCalendarId String
   name               String
-  isPrimary          Boolean @default(false)
-  countsAsBusy       Boolean @default(true)
+  isPrimary          Boolean    @default(false)
+  countsAsBusy       Boolean    @default(true)
   // The user owns it, so booking events can be created in it (calendar.events.owned covers
   // owned calendars only). False for subscribed and shared calendars.
-  canCreateEvents    Boolean @default(false)
+  canCreateEvents    Boolean    @default(false)
+  busyAccess         BusyAccess @default(UNKNOWN)
 
   connection     CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   demoBusyEvents DemoBusyEvent[]
+  bookings       Booking[]
 
   @@unique([connectionId, externalCalendarId])
 }
@@ -166,17 +182,20 @@ model EventType {
 //   WHERE (status = 'CONFIRMED')
 // so one host can never have two overlapping confirmed bookings, even if two requests race.
 model Booking {
-  id            String        @id @default(uuid(7)) @db.Uuid
-  eventTypeId   String        @db.Uuid
-  hostId        String        @db.Uuid
-  guestName     String
-  guestEmail    String
-  guestTimeZone String
-  startsAt      DateTime      @db.Timestamptz(3)
-  endsAt        DateTime      @db.Timestamptz(3)
-  status        BookingStatus @default(CONFIRMED)
-  // The event created on the host's calendar (phase 7).
+  id              String        @id @default(uuid(7)) @db.Uuid
+  eventTypeId     String        @db.Uuid
+  hostId          String        @db.Uuid
+  guestName       String
+  guestEmail      String
+  guestTimeZone   String
+  startsAt        DateTime      @db.Timestamptz(3)
+  endsAt          DateTime      @db.Timestamptz(3)
+  status          BookingStatus @default(CONFIRMED)
+  // The event created on the host's calendar (phase 7), and that calendar, so the event can be
+  // deleted when the booking is cancelled or the host deletes their account. Set null if the
+  // calendar disappears (disconnected, or deleted at Google): the event can't be reached then.
   externalEventId String?
+  calendarId      String?       @db.Uuid
   // SHA-256 of the guest's manage-link token; the token itself is never stored.
   manageTokenHash String        @unique
   createdAt       DateTime      @default(now()) @db.Timestamptz(3)
@@ -185,8 +204,10 @@ model Booking {
   // Restrict: an event type with bookings can't be deleted (it's deactivated instead), so
   // bookings are never lost by accident.
   eventType EventType @relation(fields: [eventTypeId, hostId], references: [id, userId], onDelete: Restrict)
+  calendar  Calendar? @relation(fields: [calendarId], references: [id], onDelete: SetNull)
 
   @@index([hostId, startsAt])
+  @@index([calendarId])
 }
 
 // The demo provider's calendar events: busy intervals only (no titles), like what we read from
@@ -200,6 +221,27 @@ model DemoBusyEvent {
   calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
 
   @@index([calendarId, startsAt])
+}
+
+// A host's busy intervals as read from their calendars, reused for 60 seconds so that many guests
+// on the same booking page cause one calendar read (src/calendar/busyCache.ts). In Postgres, not
+// memory, so every server instance shares it and a change on one instance (a booking, a calendar
+// ticked) clears it for all. Busy intervals only, like everything read from Google; deleted with
+// the host.
+model BusyCache {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  hostId      String   @db.Uuid
+  // The span that was read: a request is served from this row only if it lies inside it.
+  windowStart DateTime @db.Timestamptz(3)
+  windowEnd   DateTime @db.Timestamptz(3)
+  // [[start, end], ...] in UTC epoch milliseconds.
+  intervals   Json
+  fetchedAt   DateTime @db.Timestamptz(3)
+
+  host User @relation(fields: [hostId], references: [id], onDelete: Cascade)
+
+  @@index([hostId, fetchedAt])
+  @@index([fetchedAt])
 }
 
 // Hit counts for the rate limiters, shared by every server instance (from the Study Scheduler).

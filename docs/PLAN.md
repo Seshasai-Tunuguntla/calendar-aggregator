@@ -182,6 +182,7 @@ step 4 gives 09:00, 10:30, 11:00, 12:00 and 12:30. The 4-hour minimum notice the
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/calendars` | calendars across connections |
+| POST | `/api/calendars/sync` | copy the calendar lists again and re-check access (phase 6) |
 | PATCH | `/api/calendars/:id` | `{ countsAsBusy }` |
 | GET / PUT | `/api/availability` | rules + settings |
 | GET / POST / PATCH / DELETE | `/api/event-types` | manage event types |
@@ -192,9 +193,9 @@ step 4 gives 09:00, 10:30, 11:00, 12:00 and 12:30. The 4-hour minimum notice the
 ### Public (no login, rate limited)
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/public/:handle/:slug` | event type info (no private data) |
-| GET | `/api/public/:handle/:slug/slots?from=&to=&tz=` | free slots |
-| POST | `/api/public/:handle/:slug/bookings` | `{ start, guestName, guestEmail, guestTimeZone }` |
+| GET | `/api/public/book/:handle/:slug` | event type info (no private data); under `/book/` since phase 6 |
+| GET | `/api/public/book/:handle/:slug/slots?from=&to=&tz=` | free slots |
+| POST | `/api/public/book/:handle/:slug/bookings` | `{ start, guestName, guestEmail, guestTimeZone }` |
 | GET | `/api/public/bookings/:token` | guest views their booking |
 | POST | `/api/public/bookings/:token/cancel` | guest cancels |
 | POST | `/api/public/bookings/:token/reschedule` | guest reschedules |
@@ -269,8 +270,8 @@ goal; trade-off vs short caching to be explained).
 | 2 | Slot algorithm as pure functions, all required tests + reference implementation (approach explained first) | Done |
 | 3 | Prisma schema + migrations (incl. exclusion constraint), CalendarProvider interface, DemoCalendarProvider, demo host login, session cookies | Done |
 | 4 | Google OAuth: setup instructions, start/callback, PKCE, state, ID token verification, encrypted refresh tokens, refresh handling, disconnect; Google mocked in tests | Done |
-| 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | Done (awaiting review; real-account scope check pending) |
-| 6 | Availability rules, settings, event types, slots endpoint; "Delete my account" backend | |
+| 5 | GoogleCalendarProvider: list calendars, busy intervals, create/delete events, error handling, mocked-API tests | Done |
+| 6 | Availability rules, settings, event types, slots endpoint; "Delete my account" backend | Done (awaiting review) |
 | 7 | Public booking: double-booking protection, Google event creation, manage token, cancel, reschedule, concurrency tests | |
 | 8 | Design: 3 mockups (desktop + 375 px) with pros/cons, author picks one; host frontend through shared design tokens (incl. "Delete my account") | |
 | 9 | Public booking frontend (guest flow end to end) | |
@@ -339,7 +340,7 @@ The rule: the newest version whose client runs cleanly under Node type stripping
 - **Sign-in identity comes from connections**, not a column on User: `CalendarConnection(provider, externalAccountId)` is unique, where `externalAccountId` is Google's stable `sub` (emails can change). Signing in with any of a user's connected Google accounts finds the same user, and one Google account can't belong to two users. `grantedScopes` records what the user actually ticked on Google's consent screen.
 - **`SelectedCalendar` became `Calendar`** (it lists every calendar of a connection, with `countsAsBusy`), and **`DemoBusyEvent` belongs to a calendar**, not a user, so "which calendars count as busy" works in the demo too.
 - **`Session` table** (new): see Sessions below.
-- **Deferred:** which calendar new bookings go into, and the booking's Google sync fields, arrive with phases 6-7 in their own migrations.
+- **Deferred:** which calendar new bookings go into arrives with phase 7. Phase 6 added `Booking.calendarId` (the calendar holding the booking's event), which account deletion needs.
 
 ### Hand-written constraints, and the check that keeps them
 
@@ -463,7 +464,53 @@ Decision: request `calendar.events.freebusy`, the scope Google documents for cal
 
 **For phase 6:** some calendars in the list can't be read by `freeBusy` at all (holiday calendars; probably birthdays/contacts too). Because busy lookups fail closed, ticking one would hide every slot. The calendars API must refuse to count such a calendar as busy, and the UI should explain why. Approved: during `syncCalendars`, one short `freeBusy` probe over all listed calendars records whether each can be read, rather than guessing from calendar id patterns. Refinement (approved): only a permanent answer (`notFound` for that calendar) marks it unreadable; a temporary failure (5xx, rate limits, network) must not, and instead shows a clear "can't check your calendar right now" state. Both cases tested.
 
+## Phase 6 decisions (host settings, event types, slots, account deletion)
+
+All backend; the pages come in phases 8-9. Every request and response has a shared Zod schema (`shared/src/api/`), which the server parses with and the tests check responses against.
+
+### Which calendars can count as busy (the approved holiday-calendar refinement)
+
+- **`Calendar.busyAccess`**: `READABLE`, `UNREADABLE` or `UNKNOWN`, from a new provider method, `checkBusyAccess`: one `freeBusy` request per 50 calendars, read per calendar. Only Google's `notFound` for a calendar is permanent (`UNREADABLE`). Any other per-calendar error (`backendError`, `internalError`), or the whole request failing (5xx, rate limits, network, after the provider's retries), is temporary: `UNKNOWN`, which the UI shows as "can't check your calendar right now". A temporary failure never marks a calendar unreadable (tested both ways, at sync and when ticking).
+- **Sync** (after sign-in, and `POST /api/calendars/sync`) records access for every calendar. If only the check fails, the list is still saved with `UNKNOWN`. If listing fails temporarily, the account's calendars are kept and marked `UNKNOWN`; if access was revoked, the connection becomes `NEEDS_RECONNECT` (as in phase 4) and its calendars are left as they were. New calendars count as busy only if owned and not unreadable.
+- **Ticking re-checks live, every time** (`PATCH /api/calendars/:id {countsAsBusy: true}`), so a stored answer never goes stale: unreadable -> 409 with an explanation (holiday calendars as the example); temporary -> 503 "Can't check your calendar right now. Try again in a minute." and `UNKNOWN`; revoked -> 409 "Reconnect <account>". **Unticking always works**, even with Google down.
+- No CHECK constraint forbids "unreadable and ticked": a calendar that later becomes unreadable (sharing withdrawn) must keep failing closed until the host unticks it, rather than be unticked silently and allow double-booking.
+- **The demo mirrors Google:** its "Holidays in India" calendar now has Google's real holiday-calendar id, and the demo provider treats that id pattern exactly as Google does (unreadable; busy lookups fail `not_found`). It no longer generates holiday events nobody could read. The README's known trade-offs explain why holidays don't block bookings.
+- **`HttpError` may be 5xx now.** The central error handler passed only 4xx messages through, so a 503 "try again later" arrived as a generic 500. `HttpError` is always written to be client-safe, so its status and message now pass through whatever the status; a 5xx from anywhere else is still hidden (both tested).
+
+### Availability and event types
+
+- **`GET/PUT /api/availability`**: time zone, weekly rules and settings together; PUT replaces all of it in one transaction, so slots never see half an update. Validation is the shared schema (phase 2's overlap and midnight rules, settings ranges equal to the database CHECKs, IANA zones only), so messages match the client's.
+- **`/api/event-types`** (GET, POST, PATCH, DELETE): responses include `bookingPath` (`/book/<handle>/<slug>`). A slug the host already uses -> 409 naming it; another host's id -> 404 like a missing one; at most 50 per host (the demo host is shared, so a script can't fill the table). **An event type with bookings can't be deleted** (409, "turn it off instead"): checked before deleting, because Prisma 6 reports the database's RESTRICT violation (Postgres `23001`) only as an unparsed error, the same problem as `23P01` in phase 3. The foreign key still guards the race with a new booking (the delete fails; nothing is lost).
+
+### Slots
+
+- **Routes moved under `/api/public/book/`** (like the page, `/book/:handle/:slug`). With the draft's `/api/public/:handle/:slug`, a host whose handle is `bookings` would collide with phase 7's `/api/public/bookings/:token`.
+- **`?from=&to=&tz=` are dates in the guest's zone** (to exclusive, at most 42 days). The server turns them into instants with Temporal (`localDayInterval`), so the client needs no time-zone library; it groups the returned UTC slots by the guest's date with `localParts`. Tested: 09:00 IST on Monday is Sunday evening for a New York guest.
+- **`availableSlots`** gathers the inputs and calls phase 2's pure `computeSlots`: the host's rules, busy times from every calendar that counts as busy (each connection's provider in parallel), and confirmed bookings (busy, and counted for the daily limit). Busy times are fetched only for the part of the request that minimum notice and the horizon leave open, widened by the buffers and the event's length, so a past or far-future week costs no Google request (tested); bookings get two extra days either side so whole local days are counted.
+- **Fails closed** (phase 5's rule): if any calendar that counts as busy can't be read (unreadable, Google down or rate limiting, access revoked), the guest gets 503 "This booking page can't show times right now" and no slots. The message never names a calendar or account; the log gets the error kind, never tokens. The worked example from this plan runs end to end through the API (Google host, fake Google busy times) and offers only 12:30-13:00 IST.
+
+### Protecting Google from the public slots endpoint (checked before the phase 6 commit)
+
+The slots endpoint needs no sign-in and reads the host's calendars, so three limits sit in front of Google:
+
+1. **Rate limit on every public endpoint**, with the Postgres limiter: one limiter on the whole `/api/public` router (so phase 7's public routes get it too), 300 requests per client per 15 minutes, counted together across endpoints and server instances. Requests for pages that don't exist count too, so probing for handles is limited. Tested: 300 mixed requests, then 429 on both endpoints, counted in one `RateLimit` row, another client unaffected.
+2. **A 60-second busy-time cache per host** (`BusyCache` table, `src/calendar/busyCache.ts`), so many guests on the same page cause one read of the calendars. In Postgres rather than memory: on Vercel each instance has its own memory, so an in-memory cache would mean one read per instance, and clearing it on one instance (a booking) wouldn't clear the others. Each read covers the requested span plus an hour of slack, so later requests (whose span shifts as the notice edge moves with "now", or which are for a longer event type) reuse it. On one instance, the per-host decision "join a read in progress, use the table, or start a read" is taken one request at a time, so guests arriving together share one read (tested; without it, 5 simultaneous guests caused 3 reads). Failures aren't cached. Cleared when a host ticks or unticks a calendar, refreshes calendars, signs in or connects (sync), or disconnects an account; phase 7 clears it on every booking and cancellation. A read that was running when the cache was cleared isn't stored. Expired rows of every host are deleted as new ones are stored; rows go with the host on account deletion. **Bookings are never cached:** slots always read our own bookings fresh, so a booking made a second ago blocks its time whatever the cache holds.
+3. **Ranges capped at the booking horizon:** at most 42 days per request, and Google is only asked about the part that minimum notice and the horizon leave open (plus the event's length, buffers and the hour of slack). Tested: a 42-day request with a 30-day horizon asks Google for exactly now to 30 days + 90 minutes, and a range entirely past the horizon or in the past asks nothing.
+
+Mutation checks on these: 14 breaks (no freshness check, TTL boundary off by one, rows used without covering the range, no slack, decisions not one at a time, reads in progress not joined, invalidation not stopping a read in progress, a pre-clear read stored, expired rows kept, the horizon not capping the read, ticking / syncing / disconnecting not clearing the cache, the limiter removed): all 14 failed at least one test.
+
+### Delete my account (`DELETE /api/account`)
+
+As planned, with two details settled: bookings now record **`calendarId`** (the calendar holding their event; set null if that calendar disappears), which is what lets step 1 find and delete each upcoming booking's event; phase 7 fills it in. And the response is **200 with `{ revokedAtGoogle, eventsNotDeleted }`** rather than 204, because the plan also wants it to say when Google couldn't be reached. Tests: every table holds only the other user's rows afterwards; both of the user's Google accounts are revoked (the other host's isn't); upcoming events are deleted with `sendUpdates=all` and the past one is left; every session of the user ends; a wrong or differently-cased handle changes nothing; the demo host gets 403; with Google unreachable everything is still deleted and the response says so; `Origin` is required; and the same Google account can sign up again afterwards as a fresh, empty user.
+
+### Mutation checks
+
+35 deliberate breaks, one at a time: ticking without the live check; a temporary failure (while ticking, during sync, or per calendar) recorded as unreadable; `UNKNOWN` accepted as readable; unticking blocked by the check; revoked access answered as "try again"; sync marking calendars `UNKNOWN` after revoked access, or not after a listing failure; Google's `notFound` treated as temporary, or every error as permanent; slots ignoring calendar busy times, bookings, or which calendars count; cancelled bookings blocking; the busy lookup not widened by the buffer; guest dates read as UTC days; turned-off event types public; the provider's error text shown to guests; account deletion allowed for the demo, without the handle, without deleting events, deleting past events too, without revoking, without deleting bookings first, or leaving the cookie; slug clashes unexplained; event types with bookings deletable; the 50 limit off by one; another host's event type reachable; old rules kept or settings not saved; `HttpError` 503 hidden as 500; the demo reading holiday calendars. 34 failed at least one test on the first run. The survivor (reporting `revokedAtGoogle: true` when only one of two accounts was revoked) exposed a missing test, which now exists.
+
 ## Notes for later phases
+
+- **Phase 7:** creating and cancelling a booking must call `invalidateBusyCache` (with a test that the next guest's slots read the calendars again). Booking creation also gets its own, stricter limiter on top of the shared public one, since each booking writes to Google.
+- **Phase 8, dashboard warning (asked for in the phase 6 review):** when the host's booking page is showing no times because a calendar that counts as busy can't be checked, the dashboard says so, naming the calendar and account (host-only) and what to do: "can't check right now" (temporary; try again), "reconnect <account>" (access expired or revoked), or "untick <calendar>" (unreadable). Backend: a signed-in status endpoint that runs the same busy lookup guests trigger (through the cache, so it costs no extra Google calls) and reports the `CalendarProviderError`'s kind and calendar.
 
 - **Phase 12:** add `https://<production domain>/api/auth/google/callback` to the OAuth client's redirect URIs, and the five Google variables to Vercel (Production scope only).
 - **Client bundle** is ~390 kB before gzip, mostly Zod and react-router; revisit (e.g. `zod/mini` on the client) once real pages exist.
