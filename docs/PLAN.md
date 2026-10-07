@@ -727,6 +727,10 @@ Checked on a preview: Vercel's Node builder **compiles the server's `.ts` files 
 - [ ] **Author:** optionally connect the GitHub repo to the Vercel project (Vercel dashboard > calendar-aggregator > Settings > Git) for automatic deployments on push. Previews made that way are safe: no database settings, and their API switches itself off.
 - [ ] **Author:** the real-phone test: open the live link on a phone, "Try booking", book, open the manage link, cancel; and "Try as host".
 
+## After phase 12: link previews
+
+`client/index.html` has a meta description, Open Graph tags and a Twitter/X `summary_large_image` card, so a shared link shows a title, a description and a picture. The picture is the booking page with a time picked (`client/public/og-image.png`, 1200x630, the size Open Graph and X expect, taken by `npm run screenshots`), served from the site itself; every URL in the tags is absolute on the live domain. Because the app is a single page, every route gets the same tags: a shared manage link never puts its token into a preview. A test checks the tags agree, point at our own domain (the README's live link), and that the image exists at the declared size.
+
 ## Notes for later phases
 
 - **Client bundle** is ~390 kB before gzip (465 kB now), mostly Zod and react-router; revisit (e.g. `zod/mini` on the client).
