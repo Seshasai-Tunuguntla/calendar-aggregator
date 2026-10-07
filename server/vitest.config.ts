@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    name: 'server',
     // Loads .env.test and migrates the test database once, before any test file runs.
     globalSetup: ['./tests/globalSetup.ts'],
     setupFiles: ['./tests/setupEnv.ts'],

@@ -313,6 +313,19 @@ Runs everything CI runs except the end-to-end test: typecheck, lint (warnings fa
 contrast check of the design tokens (`npm run contrast`), the tests of all three workspaces (the
 server's against the test database), and the client build.
 
+Running only the tests works any of these ways:
+
+- `npm test`: each workspace with its own settings, as CI runs them.
+- `npx vitest` (or `npx vitest run`) from the repo root: the root `vitest.config.ts` runs `shared`,
+  `server` and `client` as projects with their own settings (jsdom for the client; the server's test
+  database setup).
+- `npm test --workspace server` (or `client`, `shared`), or `npx vitest` inside a workspace folder.
+
+The server's database tests share one database (`server/.env.test`, whose name must end in `_test`)
+and empty it before each test, so they run one file at a time. Started in parallel
+(`--fileParallelism`, or a second run against the same database), they stop with "Another test file
+is using the test database right now" rather than failing at random.
+
 ```bash
 npx playwright install chromium
 ```

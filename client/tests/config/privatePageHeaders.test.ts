@@ -27,7 +27,7 @@ describe('manage page headers', () => {
   });
 
   it('match what vercel.json sends in production', () => {
-    const vercel = JSON.parse(readFileSync(join(process.cwd(), '../vercel.json'), 'utf8')) as { headers: { source: string; headers: { key: string; value: string }[] }[] };
+    const vercel = JSON.parse(readFileSync(join(import.meta.dirname, '../../../vercel.json'), 'utf8')) as { headers: { source: string; headers: { key: string; value: string }[] }[] };
     const rule = vercel.headers.find((h) => h.source === '/booking/:token');
     expect(Object.fromEntries((rule?.headers ?? []).map((h) => [h.key, h.value]))).toEqual(PRIVATE_PAGE_HEADERS);
   });

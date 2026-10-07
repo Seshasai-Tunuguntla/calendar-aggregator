@@ -32,6 +32,7 @@ export default defineConfig({
   server: { port: 5190, strictPort: true, proxy: apiProxy },
   preview: { strictPort: true, proxy: apiProxy },
   test: {
+    name: 'client',
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
   },

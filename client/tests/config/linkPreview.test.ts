@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 // The link-preview tags in index.html: what Slack, LinkedIn, iMessage, X and others show when
 // someone shares the app's link.
-const html = new DOMParser().parseFromString(readFileSync(join(process.cwd(), 'index.html'), 'utf8'), 'text/html');
+const html = new DOMParser().parseFromString(readFileSync(join(import.meta.dirname, '../../index.html'), 'utf8'), 'text/html');
 const meta = (key: string) => html.querySelector(`meta[property="${key}"], meta[name="${key}"]`)?.getAttribute('content') ?? '';
 
 describe('link previews', () => {
@@ -25,12 +25,12 @@ describe('link previews', () => {
     const site = new URL(meta('og:url'));
     expect(site.protocol).toBe('https:');
     for (const image of [meta('og:image'), meta('twitter:image')]) expect(new URL(image).origin).toBe(site.origin);
-    const readme = readFileSync(join(process.cwd(), '../README.md'), 'utf8');
+    const readme = readFileSync(join(import.meta.dirname, '../../../README.md'), 'utf8');
     expect(readme).toContain(`**Live demo: <${site.origin}>**`);
   });
 
   it("point at an image that's ours, in public/, at the size the tags declare", () => {
-    const file = readFileSync(join(process.cwd(), 'public', new URL(meta('og:image')).pathname));
+    const file = readFileSync(join(import.meta.dirname, '../../public', new URL(meta('og:image')).pathname));
     expect(file.subarray(1, 4).toString()).toBe('PNG');
     expect([file.readUInt32BE(16), file.readUInt32BE(20)]).toEqual([Number(meta('og:image:width')), Number(meta('og:image:height'))]);
     expect([meta('og:image:width'), meta('og:image:height')]).toEqual(['1200', '630']);

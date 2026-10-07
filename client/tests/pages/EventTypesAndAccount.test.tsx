@@ -128,12 +128,12 @@ describe('the account page', () => {
 describe('fonts', () => {
   it('are self-hosted: nothing in the page or styles asks a font service', () => {
     for (const file of ['index.html', 'src/styles/tokens.css', 'src/styles/app.css', 'src/main.tsx']) {
-      expect(readFileSync(join(process.cwd(), file), 'utf8')).not.toMatch(/fonts\.(googleapis|gstatic)\.com|use\.typekit|fonts\.bunny/);
+      expect(readFileSync(join(import.meta.dirname, '../..', file), 'utf8')).not.toMatch(/fonts\.(googleapis|gstatic)\.com|use\.typekit|fonts\.bunny/);
     }
   });
 
   it('load one weight of the heading serif, Latin only', () => {
-    const main = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8');
+    const main = readFileSync(join(import.meta.dirname, '../../src/main.tsx'), 'utf8');
     expect(main.match(/@fontsource\/[^'"]+/g)).toEqual(['@fontsource/fraunces/latin-600.css']);
   });
 });
