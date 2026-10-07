@@ -7,7 +7,7 @@ share a booking link. A guest picks a free time in their own time zone, and the 
 your Google Calendar with an invitation from Google: a small Calendly, built to show **OAuth done
 properly** and **careful integration with a real external API**, in TypeScript end to end.
 
-**Live demo: <https://calendar-aggregator-beta.vercel.app>** (no sign-up needed: "Try booking" or "Try as host")
+**Live demo: <https://calendar-aggregator-app.vercel.app>** (no sign-up needed: "Try booking" or "Try as host")
 
 | A guest's booking page | The host's dashboard |
 |---|---|

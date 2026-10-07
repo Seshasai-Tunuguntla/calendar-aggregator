@@ -10,6 +10,30 @@
       "includeFiles": "shared/src/**"
     }
   },
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "calendar-aggregator-beta.vercel.app"
+        }
+      ],
+      "destination": "https://calendar-aggregator-app.vercel.app/$1",
+      "permanent": true
+    },
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "calendar-aggregator-seshasais-projects.vercel.app"
+        }
+      ],
+      "destination": "https://calendar-aggregator-app.vercel.app/$1",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",

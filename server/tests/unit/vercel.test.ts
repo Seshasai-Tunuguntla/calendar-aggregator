@@ -11,6 +11,7 @@ const vercelJson = JSON.parse(readFileSync(new URL('../../../vercel.json', impor
   outputDirectory: string;
   functions: Record<string, { maxDuration: number }>;
   rewrites: { source: string; destination: string }[];
+  redirects: { source: string; has: { type: string; value: string }[]; destination: string; permanent: boolean }[];
 };
 
 afterEach(() => {
@@ -46,6 +47,15 @@ describe('the Vercel function', () => {
       { source: '/api/(.*)', destination: '/api' },
       { source: '/(.*)', destination: '/index.html' },
     ]);
+  });
+
+  it('sends the old addresses to the live one, permanently, keeping the path, and never to themselves', () => {
+    const live = /\*\*Live demo: <(https:\/\/[^>]+)>\*\*/.exec(readFileSync(new URL('../../../README.md', import.meta.url), 'utf8'))?.[1] ?? '';
+    expect(vercelJson.redirects.map((r) => r.has[0]?.value)).toEqual(['calendar-aggregator-beta.vercel.app', 'calendar-aggregator-seshasais-projects.vercel.app']);
+    for (const redirect of vercelJson.redirects) {
+      expect(redirect).toMatchObject({ source: '/(.*)', destination: `${live}/$1`, permanent: true });
+      expect(redirect.has).toEqual([{ type: 'host', value: expect.not.stringMatching(new URL(live).host) }]);
+    }
   });
 
   it("switches the API off in a preview without its own database, even if it was given the production database's settings", async () => {

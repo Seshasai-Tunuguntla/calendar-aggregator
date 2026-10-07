@@ -83,7 +83,7 @@ calendar.
    For the live site, add this one too (exactly, with `https` and no trailing slash):
 
    ```
-   https://calendar-aggregator-beta.vercel.app/api/auth/google/callback
+   https://calendar-aggregator-app.vercel.app/api/auth/google/callback
    ```
 
    It's `<APP_ORIGIN>/api/auth/google/callback`, with `APP_ORIGIN` as set on Vercel. If the site

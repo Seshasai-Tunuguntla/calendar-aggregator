@@ -683,7 +683,7 @@ Checked live on the dev servers: the restarted API rebuilt the never-reset demo 
 
 ## Phase 12 decisions (deployment)
 
-**Live: <https://calendar-aggregator-beta.vercel.app>** (Vercel added "-beta" because `calendar-aggregator.vercel.app` belongs to someone else, as it added "-green" for the Study Scheduler).
+**Live: <https://calendar-aggregator-app.vercel.app>**. First deployed as `calendar-aggregator-beta.vercel.app` (Vercel added "-beta" because `calendar-aggregator.vercel.app` belongs to someone else, as it added "-green" for the Study Scheduler); moved to the cleaner name the next day, and the old address redirects there (see "After phase 12: a cleaner domain"). The checks below were made on the -beta address.
 
 ### One Vercel project, from the command line
 
@@ -722,7 +722,7 @@ Checked on a preview: Vercel's Node builder **compiles the server's `.ts` files 
 - [x] Server `.ts` files on Vercel: Vercel compiles them; the `shared` sources ship with `includeFiles` (above).
 - [x] Prisma's query engine bundled in the workspace layout, without `includeFiles` (queries work live).
 - [x] Client address read correctly for the rate limiters, then IP logging off (above).
-- [ ] **Author:** in Google Cloud Console > Clients > the web client, add the redirect URI `https://calendar-aggregator-beta.vercel.app/api/auth/google/callback` (docs/google-setup.md, step 6). Until then, "Sign in with Google" on the live site ends at Google's `redirect_uri_mismatch` page; the demo works without it.
+- [ ] **Author:** in Google Cloud Console > Clients > the web client, add the redirect URI `https://calendar-aggregator-app.vercel.app/api/auth/google/callback` (keep the -beta one until sign-in works on the new domain, then remove it) (docs/google-setup.md, step 6). Until then, "Sign in with Google" on the live site ends at Google's `redirect_uri_mismatch` page; the demo works without it.
 - [ ] **Author:** in Google Cloud Console > Data Access, replace `calendar.freebusy` with `calendar.events.freebusy` (the local test client was set up before the phase 5 switch; Testing mode doesn't need it, verification does).
 - [ ] **Author:** optionally connect the GitHub repo to the Vercel project (Vercel dashboard > calendar-aggregator > Settings > Git) for automatic deployments on push. Previews made that way are safe: no database settings, and their API switches itself off.
 - [ ] **Author:** the real-phone test: open the live link on a phone, "Try booking", book, open the manage link, cancel; and "Try as host".
@@ -730,6 +730,14 @@ Checked on a preview: Vercel's Node builder **compiles the server's `.ts` files 
 ## After phase 12: link previews
 
 `client/index.html` has a meta description, Open Graph tags and a Twitter/X `summary_large_image` card, so a shared link shows a title, a description and a picture. The picture is the booking page with a time picked (`client/public/og-image.png`, 1200x630, the size Open Graph and X expect, taken by `npm run screenshots`), served from the site itself; every URL in the tags is absolute on the live domain. Because the app is a single page, every route gets the same tags: a shared manage link never puts its token into a preview. A test checks the tags agree, point at our own domain (the README's live link), and that the image exists at the declared size.
+
+## After phase 12: a cleaner domain
+
+The site moved from `calendar-aggregator-beta.vercel.app` to **`calendar-aggregator-app.vercel.app`**, which matches the GitHub repository's name. Candidates were checked first without claiming anything (an unclaimed `*.vercel.app` name answers 404 `DEPLOYMENT_NOT_FOUND`): `slotwise`, `calendar-booking` and similar were taken; the author picked this one from those that were free. Then:
+
+- the domain was added to the project (`vercel domains add`) and `APP_ORIGIN` set to it, so Google sign-in's redirect URI is now `https://calendar-aggregator-app.vercel.app/api/auth/google/callback`;
+- **the old addresses redirect permanently (308) to the new one**, path and query kept: `calendar-aggregator-beta.vercel.app` and Vercel's team alias `calendar-aggregator-seshasais-projects.vercel.app` (`redirects` with a `host` condition in `vercel.json`). Besides keeping old links working, this matters for sign-in: the flow cookie and the session cookie belong to the domain sign-in starts on, and Google returns to `APP_ORIGIN`, so sign-in must always start on the new domain. A test checks every redirect leads to the README's live domain and none loops;
+- the link-preview tags, the README, `docs/google-setup.md` and the screenshots (the dashboard shows the booking links' address) now use the new domain.
 
 ## Notes for later phases
 
