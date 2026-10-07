@@ -7,7 +7,9 @@ on:
 jobs:
   check:
     name: Typecheck, lint, tests and build
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest (which moves to Ubuntu 26 on 19 October 2026): the image changes
+    # only when we choose to, after checking Postgres and Playwright's browser on the new one.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         # Matches the major version Neon runs in production.
@@ -47,7 +49,7 @@ jobs:
 
   e2e:
     name: End-to-end test (Playwright and axe)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17

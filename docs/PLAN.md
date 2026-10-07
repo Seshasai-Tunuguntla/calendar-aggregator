@@ -739,7 +739,16 @@ The site moved from `calendar-aggregator-beta.vercel.app` to **`calendar-aggrega
 - **the old addresses redirect permanently (308) to the new one**, path and query kept: `calendar-aggregator-beta.vercel.app` and Vercel's team alias `calendar-aggregator-seshasais-projects.vercel.app` (`redirects` with a `host` condition in `vercel.json`). Besides keeping old links working, this matters for sign-in: the flow cookie and the session cookie belong to the domain sign-in starts on, and Google returns to `APP_ORIGIN`, so sign-in must always start on the new domain. A test checks every redirect leads to the README's live domain and none loops;
 - the link-preview tags, the README, `docs/google-setup.md` and the screenshots (the dashboard shows the booking links' address) now use the new domain.
 
+## After phase 12: maintenance fixes
+
+A sweep for open problems (GitHub issues: none; CI annotations; `npm audit`; Vercel's build log), and the fixes:
+
+- **`npm audit`: 3 high-severity advisories in `deepmerge-ts` < 8** (stack exhaustion on recursive objects), pulled in by the Prisma CLI's config loader. No Prisma release fixes it (6.19.3, the latest 6.x, and even 8.0's release candidates pin 7.1.5), and npm's own suggestion was a breaking Prisma downgrade. Fix: an `overrides` entry in the root `package.json` (`deepmerge-ts` `^8.0.2`, which keeps the same `deepmerge` function and ships CommonJS too). npm wouldn't apply an override to an exact pin already in the lockfile (and dropping just those entries made it remove `@prisma/config` altogether), so the lockfile was regenerated from the same `package.json` files in a scratch copy first, to see exactly what would change: only `deepmerge-ts` 7.1.5 -> 8.0.2, `tinybench` 6.2.0 -> 6.2.1 (a patch, Vitest's), and `cookie` 1.1.1 now hoisted with Express's 0.7.2 nested (the same versions). With it: `npm audit` finds 0 vulnerabilities; `npm ci`, `prisma validate`, `generate` and `migrate status` work, as do the test and end-to-end setups that run `migrate deploy`. `npm ls` reports the override as "invalid" (Prisma asks for exactly 7.1.5); that's the deliberate trade-off. Remove the override when Prisma moves to `deepmerge-ts` 8.
+- **npm v12 will block dependency install scripts by default**, and Vercel's newer npm already warned that Prisma's (`prisma`, `@prisma/client`, `@prisma/engines`: the client generation) weren't approved. Without them, installs, CI and deploys would break on npm 12. They're approved in the root `package.json`'s `allowScripts`, pinned to 6.19.3, so a Prisma upgrade has to be approved again.
+- **Node pinned to `24.x`** (`engines`): `>=24` let Vercel move to the next major Node version on its own (its build warned). Node 26 must be a deliberate change, tested first.
+- **CI pinned to `ubuntu-24.04`**: GitHub announced that `ubuntu-latest` moves to Ubuntu 26 on 19 October 2026, which could break the Postgres service or Playwright's browser install without any change of ours.
+- **Dashboard:** the booking links' "Copy link" buttons were indented by their padding (the same fix as the day strip's Earlier/Later in phase 9).
+
 ## Notes for later phases
 
 - **Client bundle** is ~390 kB before gzip (465 kB now), mostly Zod and react-router; revisit (e.g. `zod/mini` on the client).
-- **`npm audit`** reports 3 high-severity advisories in `deepmerge-ts`, used by the Prisma CLI's config loader (`prisma` 6.13+), not by the app at runtime; npm's only offered fix is a breaking Prisma downgrade, so it's left until Prisma ships a fixed dependency.
