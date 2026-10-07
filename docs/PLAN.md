@@ -687,7 +687,7 @@ Checked live on the dev servers: the restarted API rebuilt the never-reset demo 
 
 ### One Vercel project, from the command line
 
-- **Project `calendar-aggregator`** (team seshasais-projects), created and deployed with the Vercel CLI; no Git connection yet, so deployments happen with `vercel deploy` (connecting the GitHub repo for automatic deployments is in the author's checklist). Node 24.x, region `iad1` (Washington, D.C.).
+- **Project `calendar-aggregator`** (team seshasais-projects), created and first deployed with the Vercel CLI, then connected to the GitHub repository (after phase 12), so every push to `main` deploys to production and other branches get previews. Node 24.x, region `iad1` (Washington, D.C.).
 - **`vercel.json`:** `npm ci`; build `node server/scripts/vercelBuild.ts`; static output `client/dist`; the API function `api/index.ts` with **`maxDuration: 60`** (what `FUNCTION_MAX_DURATION_S` assumes; a test checks they match); rewrites `/api/(.*)` -> the function and everything else -> `index.html` (static files are served first); the manage pages' headers.
 - **`api/index.ts`** only calls `createVercelApp()` (`server/src/vercel.ts`, tested): the ordinary app with the cold-start demo reset on. It answers a plain 503 instead of starting when settings are missing (their names are logged, never values), and when it's a preview without a database of its own.
 
@@ -724,7 +724,7 @@ Checked on a preview: Vercel's Node builder **compiles the server's `.ts` files 
 - [x] Client address read correctly for the rate limiters, then IP logging off (above).
 - [ ] **Author:** in Google Cloud Console > Clients > the web client, add the redirect URI `https://calendar-aggregator-app.vercel.app/api/auth/google/callback` (keep the -beta one until sign-in works on the new domain, then remove it) (docs/google-setup.md, step 6). Until then, "Sign in with Google" on the live site ends at Google's `redirect_uri_mismatch` page; the demo works without it.
 - [ ] **Author:** in Google Cloud Console > Data Access, replace `calendar.freebusy` with `calendar.events.freebusy` (the local test client was set up before the phase 5 switch; Testing mode doesn't need it, verification does).
-- [ ] **Author:** optionally connect the GitHub repo to the Vercel project (Vercel dashboard > calendar-aggregator > Settings > Git) for automatic deployments on push. Previews made that way are safe: no database settings, and their API switches itself off.
+- [x] GitHub repository connected to the Vercel project (`vercel git connect`, after phase 12): pushes to `main` deploy production. Previews made that way are safe: no database settings, and their API switches itself off.
 - [ ] **Author:** the real-phone test: open the live link on a phone, "Try booking", book, open the manage link, cancel; and "Try as host".
 
 ## After phase 12: link previews
@@ -748,6 +748,7 @@ A sweep for open problems (GitHub issues: none; CI annotations; `npm audit`; Ver
 - **Node pinned to `24.x`** (`engines`): `>=24` let Vercel move to the next major Node version on its own (its build warned). Node 26 must be a deliberate change, tested first.
 - **CI pinned to `ubuntu-24.04`**: GitHub announced that `ubuntu-latest` moves to Ubuntu 26 on 19 October 2026, which could break the Postgres service or Playwright's browser install without any change of ours.
 - **Dashboard:** the booking links' "Copy link" buttons were indented by their padding (the same fix as the day strip's Earlier/Later in phase 9).
+- **Automatic deployments:** the Vercel project is now connected to the GitHub repository (`vercel git connect`, using the GitHub access Vercel already had for the Study Scheduler; nothing changed on GitHub), so production can't drift from `main`. Checked with this commit's push.
 
 ## Notes for later phases
 
