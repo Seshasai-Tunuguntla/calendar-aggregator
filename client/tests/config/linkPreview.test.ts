@@ -13,6 +13,10 @@ describe('link previews', () => {
     // Search engines cut descriptions at about 160 characters.
     expect(meta('description').length).toBeLessThanOrEqual(160);
     expect(meta('twitter:title')).toBe(meta('og:title'));
+    // X and LinkedIn cut titles past about 60 characters; search results show about 60.
+    expect(meta('og:title').length).toBeLessThanOrEqual(60);
+    expect(html.title.length).toBeGreaterThanOrEqual(30);
+    expect(html.title.length).toBeLessThanOrEqual(60);
     expect(meta('twitter:description')).toBe(meta('og:description'));
     expect(meta('twitter:card')).toBe('summary_large_image');
   });
