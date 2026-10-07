@@ -14,14 +14,17 @@ import { HttpError } from '../utils/httpError.ts';
 
 const HAS_BOOKINGS = "This event type has bookings, so it can't be deleted. Turn it off instead.";
 
-// The bookings' foreign key (ON DELETE RESTRICT) refusing the delete. Prisma 6 reports Postgres's
-// 23001 only as text, as it does the overlap constraint's 23P01 (bookings.ts: isOverlappingBooking).
+// The bookings' foreign key (ON DELETE RESTRICT) refusing the delete. Postgres 17 (Neon, CI) reports
+// it as a foreign key violation, which Prisma 6 maps to P2003; Postgres 18 reports RESTRICT's own
+// 23001, which Prisma leaves unmapped, as it does the overlap constraint's 23P01
+// (bookings.ts: isOverlappingBooking). Both name the constraint.
+const BOOKINGS_FOREIGN_KEY = 'Booking_eventTypeId_hostId_fkey';
+
 export function isEventTypeInUse(error: unknown): boolean {
-  return (
-    error instanceof Prisma.PrismaClientUnknownRequestError &&
-    error.message.includes('23001') &&
-    error.message.includes('Booking_eventTypeId_hostId_fkey')
-  );
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    return error.code === 'P2003' && `${error.message} ${JSON.stringify(error.meta ?? {})}`.includes(BOOKINGS_FOREIGN_KEY);
+  }
+  return error instanceof Prisma.PrismaClientUnknownRequestError && error.message.includes('23001') && error.message.includes(BOOKINGS_FOREIGN_KEY);
 }
 
 const idParamSchema = z.object({ id: z.uuid('Event type not found') });
