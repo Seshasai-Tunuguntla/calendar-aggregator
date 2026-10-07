@@ -721,6 +721,12 @@ main:focus,
   color: var(--color-ink-muted);
 }
 
+/* "Copy link" starts its own line: line its text up with the link above (the padding is for the
+   hover wash and tap area). */
+.link-list .button--quiet {
+  margin-inline-start: calc(-1 * var(--space-3));
+}
+
 /* ---------- Calendars ---------- */
 
 .account {
