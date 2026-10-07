@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventTypeResponseSchema, eventTypesResponseSchema } from '@calendar-aggregator/shared';
 import { createApp } from '../../src/app.ts';
 import { MAX_EVENT_TYPES } from '../../src/routes/eventTypes.ts';
@@ -9,6 +9,10 @@ import { FakeGoogle, TEST_GOOGLE_CONFIG, type FakeAccount } from '../helpers/fak
 import { signInWithGoogle } from '../helpers/googleSignIn.ts';
 
 const db = useTestDatabase();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 const HOST: FakeAccount = { sub: '7000000000000000001', email: 'host@gmail.com', name: 'Sesha Sai' };
 const OTHER: FakeAccount = { sub: '7000000000000000002', email: 'other@gmail.com', name: 'Other Host' };
 
@@ -121,6 +125,17 @@ describe('DELETE /api/event-types/:id', () => {
     const res = await browser.delete(`/api/event-types/${eventType.id}`);
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: "This event type has bookings, so it can't be deleted. Turn it off instead." });
+    expect(await list()).toHaveLength(1);
+  });
+
+  it('gives the same answer, not a 500, when a guest books it between the check and the delete', async () => {
+    const { eventType } = eventTypeResponseSchema.parse((await create(CALL)).body);
+    const userId = (await db.user.findFirstOrThrow({ where: { email: HOST.email } })).id;
+    await createBooking(db, { eventTypeId: eventType.id, hostId: userId, start: '2026-10-12T09:00Z', end: '2026-10-12T09:30Z' });
+    // The check ran just before the guest's booking landed.
+    vi.spyOn(db.booking, 'count').mockResolvedValueOnce(0);
+    const res = await browser.delete(`/api/event-types/${eventType.id}`);
+    expect([res.status, res.body]).toEqual([409, { error: "This event type has bookings, so it can't be deleted. Turn it off instead." }]);
     expect(await list()).toHaveLength(1);
   });
 

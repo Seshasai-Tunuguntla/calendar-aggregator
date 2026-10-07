@@ -12,6 +12,18 @@ import type { Db } from '../db.ts';
 import { currentUser } from '../middleware/auth.ts';
 import { HttpError } from '../utils/httpError.ts';
 
+const HAS_BOOKINGS = "This event type has bookings, so it can't be deleted. Turn it off instead.";
+
+// The bookings' foreign key (ON DELETE RESTRICT) refusing the delete. Prisma 6 reports Postgres's
+// 23001 only as text, as it does the overlap constraint's 23P01 (bookings.ts: isOverlappingBooking).
+export function isEventTypeInUse(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientUnknownRequestError &&
+    error.message.includes('23001') &&
+    error.message.includes('Booking_eventTypeId_hostId_fkey')
+  );
+}
+
 const idParamSchema = z.object({ id: z.uuid('Event type not found') });
 
 // Plenty for a person, and it stops a script filling the database (the demo host is shared).
@@ -89,10 +101,14 @@ export function eventTypesRouter({ db, requireAuth }: { db: Db; requireAuth: Req
   // delete then fails (500) and nothing is lost.
   router.delete('/:id', async (req, res) => {
     const { id } = await findOwn(currentUser(req).id, req.params);
-    if ((await db.booking.count({ where: { eventTypeId: id } })) > 0) {
-      throw new HttpError(409, "This event type has bookings, so it can't be deleted. Turn it off instead.");
+    if ((await db.booking.count({ where: { eventTypeId: id } })) > 0) throw new HttpError(409, HAS_BOOKINGS);
+    try {
+      await db.eventType.delete({ where: { id } });
+    } catch (error) {
+      // A guest booked it between the count and the delete: the foreign key refuses, with the same answer.
+      if (isEventTypeInUse(error)) throw new HttpError(409, HAS_BOOKINGS);
+      throw error;
     }
-    await db.eventType.delete({ where: { id } });
     res.status(204).end();
   });
 

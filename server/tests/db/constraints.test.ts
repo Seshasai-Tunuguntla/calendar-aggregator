@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { useTestDatabase } from '../helpers/db.ts';
+import { isEventTypeInUse } from '../../src/routes/eventTypes.ts';
 import { createBooking, createEventType, createUser } from '../helpers/factories.ts';
 
 const db = useTestDatabase();
@@ -155,6 +156,9 @@ describe('other booking constraints', () => {
     const { eventType, book } = await hostWithEventType();
     await book('2026-10-12T09:00Z', '2026-10-12T09:30Z');
     expect(await violation(db.eventType.delete({ where: { id: eventType.id } }))).toContain('Booking_eventTypeId_hostId_fkey');
+    // The route recognises exactly this error, to answer it like its own check (routes/eventTypes.ts).
+    expect(isEventTypeInUse(await db.eventType.delete({ where: { id: eventType.id } }).catch((error: unknown) => error))).toBe(true);
+    expect(isEventTypeInUse(new Error('something else'))).toBe(false);
   });
 });
 
